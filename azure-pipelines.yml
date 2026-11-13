@@ -1,0 +1,133 @@
+# Azure DevOps pipeline for The Idea Board.
+#
+# Every step calls scripts/pipeline.sh <stage> - the SAME entry point used locally - so the
+# YAML and the local runner cannot drift. Lint/test runs on a Microsoft-hosted agent; stages
+# that talk to the cluster need a SELF-HOSTED agent on the machine running kind (a hosted
+# agent cannot reach 127.0.0.1 of your workstation). See README "CI/CD with Azure Pipelines".
+
+trigger:
+  branches:
+    include: [main, deploy-preview/*]
+
+pr:
+  branches:
+    include: [main]
+
+parameters:
+  - name: selfHostedPool
+    displayName: Agent pool with access to the kind cluster
+    type: string
+    default: kind-local
+  - name: previewRequest
+    displayName: "Optional preview request, e.g. '/deploy-preview feature-x with 2 backend replicas'"
+    type: string
+    default: " "
+
+variables:
+  # Immutable artifact: one image tag per commit, promoted unchanged staging -> production.
+  IMAGE_TAG: $[ substring(variables['Build.SourceVersion'], 0, 12) ]
+  ARTIFACTS_DIR: $(Build.ArtifactStagingDirectory)/pipeline
+  AI_ENABLED: "true"
+  OLLAMA_HOST: http://localhost:11434
+  OLLAMA_MODEL: llama3.2:3b
+  KIND_CLUSTER_NAME: idea-board
+  isMain: $[ eq(variables['Build.SourceBranch'], 'refs/heads/main') ]
+  isPreviewBranch: $[ startsWith(variables['Build.SourceBranch'], 'refs/heads/deploy-preview/') ]
+
+stages:
+  - stage: LintTest
+    displayName: Lint & test
+    pool: { vmImage: ubuntu-latest }
+    jobs:
+      - job: lint_test
+        steps:
+          - task: UsePythonVersion@0
+            inputs: { versionSpec: "3.12" }
+          - task: NodeTool@0
+            inputs: { versionSpec: "22.x" }
+          - script: bash scripts/install-tools.sh
+            displayName: Install pinned helm / terraform
+          - script: bash scripts/pipeline.sh lint-test
+            displayName: scripts/pipeline.sh lint-test
+            env: { INSTALL_DEPS: "1", AI_ENABLED: "false" }
+
+  - stage: Build
+    displayName: Build images
+    dependsOn: LintTest
+    condition: and(succeeded(), or(eq(variables.isMain, true), eq(variables.isPreviewBranch, true)))
+    pool: { name: "${{ parameters.selfHostedPool }}" }
+    jobs:
+      - job: build
+        steps:
+          - script: bash scripts/pipeline.sh build
+            displayName: scripts/pipeline.sh build
+
+  - stage: Preview
+    displayName: AI-planned preview environment
+    dependsOn: Build
+    condition: and(succeeded(), or(eq(variables.isPreviewBranch, true), ne('${{ parameters.previewRequest }}', ' ')))
+    pool: { name: "${{ parameters.selfHostedPool }}" }
+    jobs:
+      - job: preview
+        steps:
+          - script: |
+              trigger='${{ parameters.previewRequest }}'
+              if [ -z "${trigger// }" ]; then trigger="${BUILD_SOURCEBRANCH#refs/heads/}"; fi
+              bash scripts/pipeline.sh preview "$trigger"
+            displayName: scripts/pipeline.sh preview
+          - publish: $(ARTIFACTS_DIR)
+            artifact: preview-$(System.JobAttempt)
+            condition: always()
+
+  - stage: DeployStaging
+    displayName: Deploy staging
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables.isMain, true))
+    pool: { name: "${{ parameters.selfHostedPool }}" }
+    jobs:
+      - deployment: deploy_staging
+        environment: idea-board-staging
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - script: bash scripts/pipeline.sh deploy-staging
+                  displayName: scripts/pipeline.sh deploy-staging (AI env-config + health gate)
+                - publish: $(ARTIFACTS_DIR)
+                  artifact: deploy-staging-$(System.JobAttempt)
+                  displayName: Publish AI audit log, generated values, incidents
+                  condition: always()
+
+  - stage: VerifyStaging
+    displayName: Verify staging
+    dependsOn: DeployStaging
+    pool: { name: "${{ parameters.selfHostedPool }}" }
+    jobs:
+      - job: verify
+        steps:
+          - script: bash scripts/pipeline.sh verify-staging
+            displayName: scripts/pipeline.sh verify-staging (smoke tests via ingress)
+          - publish: $(ARTIFACTS_DIR)
+            artifact: verify-staging-$(System.JobAttempt)
+            condition: always()
+
+  - stage: PromoteProduction
+    displayName: Promote to production
+    dependsOn: VerifyStaging
+    pool: { name: "${{ parameters.selfHostedPool }}" }
+    jobs:
+      # Add an approval check on the "idea-board-production" environment in Azure DevOps
+      # (Pipelines > Environments > Approvals and checks) to gate this stage on a human.
+      - deployment: promote
+        environment: idea-board-production
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - script: bash scripts/pipeline.sh promote-production
+                  displayName: scripts/pipeline.sh promote-production (same image tag)
+                - publish: $(ARTIFACTS_DIR)
+                  artifact: production-$(System.JobAttempt)
+                  condition: always()
