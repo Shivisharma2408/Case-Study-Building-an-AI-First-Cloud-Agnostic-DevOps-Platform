@@ -135,7 +135,8 @@ def decide(
     raw: str | None = None
     model: str | None = None
     duration: float | None = None
-    validation: dict[str, Any] = {"valid": False, "errors": []}
+    # valid=None: there was no LLM output to validate (disabled/unavailable).
+    validation: dict[str, Any] = {"valid": None, "errors": []}
 
     reason: str
     if not config.enabled:

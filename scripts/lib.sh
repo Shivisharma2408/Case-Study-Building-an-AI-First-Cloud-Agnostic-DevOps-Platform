@@ -68,7 +68,8 @@ python_bin() {
 # The AI tooling CLI (ai/aiops). All AI decisions are audited under $ARTIFACTS_DIR/ai.
 aiops() {
   # Single PYTHONPATH entry: the list separator differs between Windows (;) and POSIX (:).
-  PYTHONPATH="$REPO_ROOT/ai" "$(python_bin)" -m aiops "$@"
+  # MSYS_NO_PATHCONV: stop Git Bash rewriting "/deploy-preview ..." into a Windows path.
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" PYTHONPATH="$REPO_ROOT/ai" "$(python_bin)" -m aiops "$@"
 }
 
 # terraform / helm: native binary if installed, else the official container image.

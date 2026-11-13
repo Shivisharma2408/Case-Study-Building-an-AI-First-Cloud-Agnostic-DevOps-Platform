@@ -37,7 +37,7 @@ def _cmd_preview(cfg: AIConfig, a: argparse.Namespace) -> int:
         return 0
     results = execute(decision.value, req.policy, req.namespace, a.context, dry_run=a.dry_run)
     failed = [r for r in results if r.returncode != 0]
-    if not failed and req.action == "deploy":
+    if not failed and not a.dry_run and req.action == "deploy":
         print(f"preview ready: http://{req.host}:{a.ingress_port}/")
     return 1 if failed else 0
 
@@ -119,7 +119,11 @@ def main(argv: list[str] | None = None) -> int:
         "health": _cmd_health,
         "geniac": _cmd_geniac,
     }
-    return handlers[args.command](cfg, args)
+    try:
+        return handlers[args.command](cfg, args)
+    except (ValueError, PermissionError) as exc:
+        print(f"aiops {args.command}: error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
