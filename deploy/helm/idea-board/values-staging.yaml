@@ -1,0 +1,7 @@
+# Staging: runs in namespace `staging` of the local kind cluster.
+# Sizing is layered on top by the AI env-config step from deploy/env-specs/staging.txt.
+environment: staging
+ingress:
+  host: staging.ideaboard.localhost
+backend:
+  logLevel: DEBUG

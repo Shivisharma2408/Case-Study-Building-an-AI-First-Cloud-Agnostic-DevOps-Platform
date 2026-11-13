@@ -1,0 +1,8 @@
+The Idea Board ({{ .Values.environment }}) is deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+{{- if .Values.ingress.enabled }}
+
+  App:    http://{{ .Values.ingress.host }}<:ingress-port>/
+  Health: http://{{ .Values.ingress.host }}<:ingress-port>/healthz
+
+On the local kind cluster the ingress port is 8080 by default (INGRESS_HTTP_PORT).
+{{- end }}

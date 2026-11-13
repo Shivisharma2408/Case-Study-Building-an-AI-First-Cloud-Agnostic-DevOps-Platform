@@ -1,0 +1,87 @@
+{{- $labels := dict "app.kubernetes.io/name" .Values.name "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/managed-by" .Release.Service -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- toYaml $labels | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- toYaml $labels | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: {{ .Values.name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            - { name: http, containerPort: {{ .Values.port }} }
+          readinessProbe:
+            httpGet: { path: {{ .Values.probes.path | quote }}, port: http }
+            periodSeconds: {{ .Values.probes.readinessPeriodSeconds }}
+          livenessProbe:
+            httpGet: { path: {{ .Values.probes.path | quote }}, port: http }
+            initialDelaySeconds: {{ .Values.probes.livenessInitialDelaySeconds }}
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  selector: {{- toYaml $labels | nindent 4 }}
+  ports:
+    - { name: http, port: {{ .Values.port }}, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- toYaml $labels | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+        {{- if .Values.ingress.enabled }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace }}
+        {{- end }}
+      ports:
+        - { protocol: TCP, port: {{ .Values.port }} }
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ required "ingress.host is required when ingress is enabled" .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.pathPrefix }}
+            pathType: Prefix
+            backend:
+              service: { name: {{ .Values.name }}, port: { name: http } }
+{{- end }}

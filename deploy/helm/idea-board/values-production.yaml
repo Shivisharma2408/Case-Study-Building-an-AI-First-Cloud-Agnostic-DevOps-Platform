@@ -1,0 +1,14 @@
+# Production: runs in namespace `production` of the local kind cluster.
+# Sizing is layered on top by the AI env-config step from deploy/env-specs/production.txt.
+environment: production
+ingress:
+  host: ideaboard.localhost
+backend:
+  logLevel: INFO
+  replicaCount: 2
+  podDisruptionBudget: { enabled: true, minAvailable: 1 }
+frontend:
+  replicaCount: 2
+  podDisruptionBudget: { enabled: true, minAvailable: 1 }
+topologySpread:
+  enabled: true

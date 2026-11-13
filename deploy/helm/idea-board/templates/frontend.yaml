@@ -1,0 +1,80 @@
+{{- $c := .Values.frontend -}}
+{{- $sel := dict "ctx" $ "component" "frontend" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "idea-board.fullname" . }}-frontend
+  labels:
+    {{- include "idea-board.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  {{- if not $c.autoscaling.enabled }}
+  replicas: {{ $c.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels:
+      {{- include "idea-board.selectorLabels" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "idea-board.labels" . | nindent 8 }}
+        {{- include "idea-board.selectorLabels" $sel | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "idea-board.podSecurityContext" . | nindent 8 }}
+        runAsUser: 101
+        runAsGroup: 101
+      {{- include "idea-board.topologySpread" $sel | nindent 6 }}
+      containers:
+        - name: frontend
+          image: "{{ $c.image.repository }}:{{ $c.image.tag }}"
+          imagePullPolicy: {{ $c.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: BACKEND_UPSTREAM
+              value: "http://{{ include "idea-board.fullname" . }}-backend:8000"
+          livenessProbe:
+            httpGet: { path: /nginx-health, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /nginx-health, port: http }
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          securityContext:
+            {{- include "idea-board.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            # nginx renders its config from /etc/nginx/templates at start-up and keeps
+            # pid/temp files in /tmp; everything else stays read-only.
+            - { name: tmp, mountPath: /tmp }
+            - { name: nginx-conf, mountPath: /etc/nginx/conf.d }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+        - name: nginx-conf
+          emptyDir: { sizeLimit: 1Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "idea-board.fullname" . }}-frontend
+  labels:
+    {{- include "idea-board.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "idea-board.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

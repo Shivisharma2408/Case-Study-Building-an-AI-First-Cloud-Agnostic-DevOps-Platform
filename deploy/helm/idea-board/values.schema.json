@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "idea-board chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["backend", "frontend", "database", "ingress"],
+  "definitions": {
+    "cpu": { "type": "string", "pattern": "^([0-9]+m|[0-9]+(\\.[0-9]+)?)$" },
+    "memory": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "limits"],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu", "memory"],
+          "properties": { "cpu": { "$ref": "#/definitions/cpu" }, "memory": { "$ref": "#/definitions/memory" } }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu", "memory"],
+          "properties": { "cpu": { "$ref": "#/definitions/cpu" }, "memory": { "$ref": "#/definitions/memory" } }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._/:-]{0,200}$" },
+        "tag": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "maxReplicas": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 10, "maximum": 95 }
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "component": {
+      "type": "object",
+      "required": ["image", "replicaCount", "resources"],
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "resources": { "$ref": "#/definitions/resources" },
+        "autoscaling": { "$ref": "#/definitions/autoscaling" },
+        "podDisruptionBudget": { "$ref": "#/definitions/pdb" }
+      }
+    }
+  },
+  "properties": {
+    "environment": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "backend": {
+      "allOf": [{ "$ref": "#/definitions/component" }],
+      "properties": {
+        "logLevel": { "enum": ["DEBUG", "INFO", "WARNING", "ERROR"] },
+        "maxIdeaLength": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      }
+    },
+    "frontend": { "$ref": "#/definitions/component" },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "podSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+        "cidrs": { "type": "array", "items": { "type": "string" } },
+        "embedded": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean" }, "image": { "type": "string" } }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "host": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$" },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean" }, "secretName": { "type": "string" } }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressControllerNamespace": { "type": "string" }
+      }
+    },
+    "topologySpread": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
+    }
+  }
+}

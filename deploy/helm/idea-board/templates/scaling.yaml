@@ -1,0 +1,45 @@
+{{- range $component := list "backend" "frontend" }}
+{{- $c := index $.Values $component }}
+{{- $sel := dict "ctx" $ "component" $component }}
+{{- if $c.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "idea-board.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "idea-board.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "idea-board.fullname" $ }}-{{ $component }}
+  minReplicas: {{ $c.autoscaling.minReplicas }}
+  maxReplicas: {{ max $c.autoscaling.minReplicas $c.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $c.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- /* A PDB that equals the replica count would block node drains, so only render it when it can be satisfied. */}}
+{{- $minReplicas := ternary $c.autoscaling.minReplicas $c.replicaCount $c.autoscaling.enabled }}
+{{- if and $c.podDisruptionBudget.enabled (gt (int $minReplicas) (int $c.podDisruptionBudget.minAvailable)) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "idea-board.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "idea-board.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  minAvailable: {{ $c.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "idea-board.selectorLabels" $sel | nindent 6 }}
+{{- end }}
+{{- end }}

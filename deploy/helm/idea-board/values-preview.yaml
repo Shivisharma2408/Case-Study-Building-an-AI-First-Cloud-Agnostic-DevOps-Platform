@@ -1,0 +1,15 @@
+# Preview environments (deploy-preview/<name>): self-contained, ephemeral, tiny.
+environment: preview
+database:
+  existingSecret: ""
+  embedded:
+    enabled: true
+backend:
+  logLevel: DEBUG
+  resources:
+    requests: { cpu: 25m, memory: 96Mi }
+    limits: { cpu: 250m, memory: 192Mi }
+frontend:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 100m, memory: 64Mi }

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: idea-board
+description: The Idea Board (React frontend + FastAPI backend). PostgreSQL is provided by the platform (Terraform) or, for previews, embedded.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.27.0-0"

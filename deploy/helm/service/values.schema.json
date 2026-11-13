@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "image", "port", "replicaCount", "resources", "probes"],
+  "properties": {
+    "name": { "type": "string", "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$" },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag"],
+      "properties": { "repository": { "type": "string" }, "tag": { "type": "string" } }
+    },
+    "port": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+    "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10 },
+    "resources": { "type": "object" },
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "readinessPeriodSeconds": { "type": "integer", "minimum": 1 },
+        "livenessInitialDelaySeconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "host": { "type": "string" },
+        "pathPrefix": { "type": "string" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "ingressControllerNamespace": { "type": "string" } }
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{{- if .Values.database.embedded.enabled -}}
+{{- /*
+  Ephemeral PostgreSQL for preview environments ONLY (emptyDir: data is lost when the pod restarts).
+  Staging/production use the Terraform-managed database behind database.existingSecret.
+*/ -}}
+{{- $fullname := include "idea-board.fullname" . -}}
+{{- $sel := dict "ctx" $ "component" "database" -}}
+{{- $secretName := printf "%s-db" $fullname -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $password := "" -}}
+{{- if and $existing $existing.data -}}
+{{- $password = index $existing.data "DB_PASSWORD" | b64dec -}}
+{{- else -}}
+{{- $password = randAlphaNum 32 -}}
+{{- end -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "idea-board.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  DB_HOST: {{ $fullname }}-postgres
+  DB_PORT: "5432"
+  DB_NAME: ideas
+  DB_USER: ideas
+  DB_PASSWORD: {{ $password | quote }}
+  DB_SSLMODE: disable
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-postgres
+  labels:
+    {{- include "idea-board.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "idea-board.selectorLabels" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "idea-board.labels" . | nindent 8 }}
+        {{- include "idea-board.selectorLabels" $sel | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "idea-board.podSecurityContext" . | nindent 8 }}
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+      containers:
+        - name: postgres
+          image: {{ .Values.database.embedded.image }}
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          env:
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: {{ $secretName }}, key: DB_NAME } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: {{ $secretName }}, key: DB_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $secretName }}, key: DB_PASSWORD } }
+          readinessProbe:
+            exec: { command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1"] }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          securityContext:
+            {{- include "idea-board.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: data, emptyDir: { sizeLimit: 512Mi } }
+        - { name: run, emptyDir: {} }
+        - { name: tmp, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-postgres
+  labels:
+    {{- include "idea-board.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  selector:
+    {{- include "idea-board.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }
+{{- end }}
