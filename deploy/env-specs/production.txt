@@ -1,0 +1,3 @@
+High-availability production environment. It must survive the loss of a pod or a node
+and node drains during maintenance without user-visible downtime, and should absorb
+traffic bursts by scaling out. Moderate cost is acceptable.

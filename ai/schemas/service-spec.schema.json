@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Service specification for Generative IaC",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "description", "image", "port"],
+  "properties": {
+    "name": { "type": "string", "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$" },
+    "description": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "image": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._/:-]{0,200}:[A-Za-z0-9._-]{1,128}$" },
+    "port": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+    "health_path": { "type": "string", "pattern": "^/[A-Za-z0-9/_-]{0,100}$", "default": "/healthz" },
+    "public": { "type": "boolean", "default": false },
+    "path_prefix": { "type": "string", "pattern": "^/[a-z0-9/_-]{0,60}$" },
+    "host": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$" },
+    "expected_traffic": { "enum": ["low", "medium", "high"], "default": "low" }
+  }
+}

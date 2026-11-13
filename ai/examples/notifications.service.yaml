@@ -1,0 +1,11 @@
+# Example input for Generative IaC:
+#   scripts/pipeline.sh generate-iac ai/examples/notifications.service.yaml
+name: notifications
+description: >
+  Sends a digest e-mail when new ideas are posted. Internal only, called by the
+  backend a few times per minute; latency is not critical.
+image: nginxinc/nginx-unprivileged:1.27.3-alpine3.20
+port: 8080
+health_path: /
+public: false
+expected_traffic: low

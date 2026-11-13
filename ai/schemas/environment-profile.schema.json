@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "AI-proposed environment profile (subset of the idea-board chart values)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "rationale", "backend", "frontend", "topologySpread"],
+  "definitions": {
+    "cpu": { "type": "string", "pattern": "^[1-9][0-9]{0,3}m$" },
+    "memory": { "type": "string", "pattern": "^[1-9][0-9]{0,4}Mi$" },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replicaCount", "resources", "autoscaling", "podDisruptionBudget"],
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requests", "limits"],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["cpu", "memory"],
+              "properties": { "cpu": { "$ref": "#/definitions/cpu" }, "memory": { "$ref": "#/definitions/memory" } }
+            },
+            "limits": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["cpu", "memory"],
+              "properties": { "cpu": { "$ref": "#/definitions/cpu" }, "memory": { "$ref": "#/definitions/memory" } }
+            }
+          }
+        },
+        "autoscaling": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minReplicas": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "maxReplicas": { "type": "integer", "minimum": 1, "maximum": 8 },
+            "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 40, "maximum": 90 }
+          }
+        },
+        "podDisruptionBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "minAvailable"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minAvailable": { "type": "integer", "minimum": 1, "maximum": 4 }
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "profile": { "enum": ["cost-sensitive", "balanced", "high-availability"] },
+    "rationale": { "type": "string", "minLength": 1, "maxLength": 600 },
+    "backend": { "$ref": "#/definitions/component" },
+    "frontend": { "$ref": "#/definitions/component" },
+    "topologySpread": { "type": "boolean" }
+  }
+}

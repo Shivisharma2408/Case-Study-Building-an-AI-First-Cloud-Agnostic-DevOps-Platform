@@ -1,0 +1,3 @@
+Cost-sensitive staging environment. It is used by the team to verify releases before
+production, carries almost no traffic and can tolerate short interruptions. Keep the
+footprint as small as possible.
