@@ -69,6 +69,18 @@ def test_no_pods_is_critical() -> None:
     assert "critical" in severities(evaluate_rules(signals(pods=[])))
 
 
+def test_failed_install_relabelled_superseded_is_not_a_rollback_target() -> None:
+    # Real helm history observed on kind: rev 1 failed, rev 2 good, rev 3 failed.
+    failed_install = {"revision": 1, "status": "superseded", "description": "Release failed: context deadline exceeded"}
+    hist = [
+        failed_install,
+        {"revision": 2, "status": "superseded", "description": "Upgrade complete"},
+        {"revision": 3, "status": "failed", "description": "Upgrade failed"},
+    ]
+    assert previous_good_revision(hist) == 2
+    assert previous_good_revision([failed_install, {"revision": 2, "status": "failed", "description": "x"}]) is None
+
+
 def test_previous_good_revision() -> None:
     assert previous_good_revision([{"revision": 1, "status": "deployed"}]) is None
     hist = [

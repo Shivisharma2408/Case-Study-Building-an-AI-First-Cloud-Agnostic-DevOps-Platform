@@ -35,8 +35,8 @@ sed -n '1,6p' "$ai_values"
 values_args=(-f "$HELM_CHART/values-$env_name.yaml" -f "$ai_values"
   --set "backend.image.tag=$backend_tag" --set "frontend.image.tag=$tag")
 
-section "Render manifests (chart schema validation)"
-helm template "$RELEASE_NAME" "$HELM_CHART" -n "$namespace" "${values_args[@]}" > "$ARTIFACTS_DIR/manifests-$env_name.yaml"
+section "Render manifests (chart schema + server-side validation)"
+helm_ctx template "$RELEASE_NAME" "$HELM_CHART" -n "$namespace" "${values_args[@]}" --validate > "$ARTIFACTS_DIR/manifests-$env_name.yaml"
 ok "rendered $(grep -c '^kind:' "$ARTIFACTS_DIR/manifests-$env_name.yaml") objects -> artifacts/manifests-$env_name.yaml"
 
 section "helm upgrade --install $RELEASE_NAME ($namespace, image $tag)"
@@ -47,7 +47,7 @@ helm_ctx upgrade --install "$RELEASE_NAME" "$HELM_CHART" -n "$namespace" "${valu
 
 section "AI: post-deploy health gate"
 health_args=(--namespace "$namespace" --release "$RELEASE_NAME" --context "$KUBE_CONTEXT"
-  --base-url "http://127.0.0.1:$INGRESS_HTTP_PORT" --host "$host" --settle "${HEALTH_SETTLE_SECONDS:-5}")
+  --base-url "$(app_base_url)" --host "$host" --settle "${HEALTH_SETTLE_SECONDS:-5}")
 (( deploy_failed )) && health_args+=(--deploy-failed)
 set +e
 aiops health "${health_args[@]}"

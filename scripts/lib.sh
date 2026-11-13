@@ -104,6 +104,10 @@ image_tag() {
 kubectl_ctx() { kubectl --context "$KUBE_CONTEXT" "$@"; }
 helm_ctx() { helm --kube-context "$KUBE_CONTEXT" "$@"; }
 
+# Where the ingress is reachable. Override APP_BASE_URL for a cloud load balancer
+# (or any other front door); the Host header still selects the environment.
+app_base_url() { echo "${APP_BASE_URL:-http://127.0.0.1:$INGRESS_HTTP_PORT}"; }
+
 app_host() {
   case "$1" in
     production) echo "ideaboard.localhost" ;;

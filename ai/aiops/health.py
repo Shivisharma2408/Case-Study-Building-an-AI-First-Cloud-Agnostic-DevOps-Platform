@@ -376,10 +376,14 @@ def previous_good_revision(history: list[dict[str, Any]]) -> int | None:
     if len(history) < 2:
         return None
     current = max(int(h["revision"]) for h in history)
+    # Helm relabels a failed first install as "superseded" once a later revision exists,
+    # so the description must be checked too: never roll back onto a release that failed.
     good = [
         int(h["revision"])
         for h in history
-        if int(h["revision"]) < current and h.get("status") in {"superseded", "deployed"}
+        if int(h["revision"]) < current
+        and h.get("status") in {"superseded", "deployed"}
+        and "failed" not in str(h.get("description", "")).lower()
     ]
     return max(good) if good else None
 

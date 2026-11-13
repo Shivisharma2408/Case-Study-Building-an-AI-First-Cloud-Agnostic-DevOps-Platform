@@ -14,6 +14,6 @@ fi
 section "Smoke tests failed - running health gate (may roll back)"
 set +e
 aiops health --namespace "$env_name" --release "$RELEASE_NAME" --context "$KUBE_CONTEXT" \
-  --base-url "http://127.0.0.1:$INGRESS_HTTP_PORT" --host "$(app_host "$env_name")" --deploy-failed
+  --base-url "$(app_base_url)" --host "$(app_host "$env_name")" --deploy-failed
 set -e
 die "verification of $env_name failed"

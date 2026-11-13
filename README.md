@@ -485,3 +485,6 @@ _Filled in from actual runs; see the end of the build log._
 | AI calls time out on a slow CPU | raise `AI_TIMEOUT_SECONDS`, or use a smaller model |
 | `*.localhost` doesn't resolve (old tools) | use `curl -H "Host: staging.ideaboard.localhost" http://127.0.0.1:8080/` |
 | Windows | run scripts from **Git Bash**. The repo forces LF line endings via `.gitattributes` |
+| `kind load docker-image` fails with `ctr: content digest … not found` (Docker Desktop containerd image store, multi-arch images) | `docker save --platform linux/$(uname -m \| sed 's/x86_64/amd64/;s/aarch64/arm64/') -o img.tar <image> && kind load image-archive img.tar --name idea-board`. The images this repo builds are single-platform and load fine |
+| Pods stuck in `ContainerCreating` / `ImagePullBackOff` for `registry.k8s.io` images on a slow network | pre-pull inside the node with retries: `docker exec idea-board-control-plane crictl pull registry.k8s.io/ingress-nginx/controller:v1.12.0`, then re-run `scripts/tf.sh local apply` (Terraform replaces the timed-out releases) |
+| GitHub release downloads (kind/helm) are too slow for `install-tools.sh` | build the pinned versions from the Go module proxy: `docker run --rm -v "$PWD/.tools/bin:/out" -e GOOS=<os> -e GOARCH=<arch> golang:1.23.4-alpine sh -c 'go install sigs.k8s.io/kind@v0.26.0 && cp -r /go/bin/* /out/'` |
