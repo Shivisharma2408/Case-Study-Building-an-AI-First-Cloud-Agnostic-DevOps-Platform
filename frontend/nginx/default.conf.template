@@ -16,6 +16,12 @@ server {
         return 200 "ok\n";
     }
 
+    # Backend health endpoints (Kubernetes routes these at the ingress; compose relies on this proxy).
+    location ~ ^/(healthz|readyz)$ {
+        proxy_pass ${BACKEND_UPSTREAM};
+        proxy_set_header Host $host;
+    }
+
     location /api/ {
         proxy_pass ${BACKEND_UPSTREAM};
         proxy_set_header Host $host;

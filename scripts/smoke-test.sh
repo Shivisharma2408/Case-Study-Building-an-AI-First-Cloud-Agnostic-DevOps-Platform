@@ -24,13 +24,16 @@ check() { # name condition-result
 log "smoke testing http://$host (via $base)"
 
 # 1. /healthz - allow time for ingress endpoints to update after a rollout.
-code=000
+#    The body is checked too: a SPA fallback (index.html with 200) must not count as healthy.
+code=000; health=""
 for _ in $(seq 1 30); do
-  code="$(req -o /dev/null -w '%{http_code}' "$base/healthz" 2>/dev/null || true)"
-  [[ "$code" == "200" ]] && break
+  health="$(req -w $'\n%{http_code}' "$base/healthz" 2>/dev/null || true)"
+  code="$(tail -n1 <<<"$health")"
+  [[ "$code" == "200" && "$health" == *'"status":"ok"'* ]] && break
   sleep 3
 done
-check "GET /healthz returns 200 (got $code)" "$([[ $code == 200 ]]; echo $?)"
+check "GET /healthz returns 200 with {\"status\":\"ok\"} (got $code)" \
+  "$([[ $code == 200 && $health == *'"status":"ok"'* ]]; echo $?)"
 
 # 2. POST a unique idea.
 content="smoke test ${env_name} $(date +%s)-$RANDOM"

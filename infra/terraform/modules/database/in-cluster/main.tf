@@ -129,6 +129,10 @@ resource "kubernetes_stateful_set_v1" "this" {
           }
 
           security_context {
+            # Must be explicit: the provider otherwise sends runAsNonRoot=false at container
+            # level, which overrides the pod setting and is rejected by PSA "restricted".
+            run_as_non_root            = true
+            run_as_user                = 70
             allow_privilege_escalation = false
             read_only_root_filesystem  = true
             capabilities {

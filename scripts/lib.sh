@@ -5,6 +5,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+_REPO_ROOT_POSIX="$REPO_ROOT"   # PATH entries must stay POSIX (a "C:" would split on the colon)
 # Windows (Git Bash / Cygwin): use C:/... form, understood by bash AND native tools
 # (python.exe, kind.exe, docker) in arguments and environment variables alike.
 if command -v cygpath >/dev/null 2>&1; then
@@ -16,8 +17,8 @@ export ARTIFACTS_DIR
 mkdir -p "$ARTIFACTS_DIR"
 
 # Optional repo-local tool directory (scripts/install-tools.sh puts kind/helm/terraform here).
-if [[ -d "$REPO_ROOT/.tools/bin" ]]; then
-  PATH="$REPO_ROOT/.tools/bin:$PATH"
+if [[ -d "$_REPO_ROOT_POSIX/.tools/bin" ]]; then
+  PATH="$_REPO_ROOT_POSIX/.tools/bin:$PATH"
 fi
 
 # Load .env (git-ignored) if present, without overriding variables already set.
