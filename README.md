@@ -240,6 +240,10 @@ bash scripts/pipeline.sh generate-iac ai/examples/notifications.service.yaml
 ls artifacts/   # ai/ (audit), generated/, incidents/, health/, smoke-*.txt, manifests-*.yaml
 ```
 
+`APP_BASE_URL` overrides where the health gate and smoke tests reach the ingress (default
+`http://127.0.0.1:8080`). Use it for a cloud load balancer, or to test through
+`kubectl port-forward svc/idea-board-frontend 18081:8080 -n staging` if the ingress controller is unavailable.
+
 Tear down: `kind delete cluster --name idea-board && rm -rf .state`.
 
 ---
@@ -470,7 +474,48 @@ You don't touch the chart, the pipeline, the AI tooling, or the cloud-agnostic m
 
 ## 10. What was verified
 
-_Filled in from actual runs; see the end of the build log._
+Run on Windows 11 ARM64 (Git Bash), Docker Desktop 29.9, kind v0.26.0 (Kubernetes v1.32), helm v3.16.4,
+terraform 1.9.8, Python 3.12, Node 26. **No Ollama was installed, so every AI feature ran in deterministic-fallback
+mode.** The LLM path is covered by unit tests with a fake Ollama client: valid, malicious, malformed, contradictory
+and over-budget outputs.
+
+| Check | Result |
+|---|---|
+| `ruff check` + `ruff format --check` (backend, ai) | ✔ clean |
+| Backend pytest (API, validation, config) | ✔ 14 passed |
+| AI pytest (allowlist validator, preview plans, env-config policy, health rules/rollback, Ollama client, geniac) | ✔ 87 passed |
+| Frontend `eslint --max-warnings 0`, `tsc`, `vite build` | ✔ |
+| `docker compose config`; `docker compose up --build --wait` | ✔ all 3 services healthy |
+| Smoke tests against compose (`BASE_URL=http://localhost:3000`) | ✔ 7/7 |
+| `helm lint --strict` (default, staging, production, preview values; service chart) | ✔ |
+| `terraform fmt -check`; `terraform validate` for **local, aws, gcp** roots | ✔ |
+| `scripts/pipeline.sh lint-test` (all of the above in one stage) | ✔ |
+| `scripts/pipeline.sh generate-iac ai/examples/notifications.service.yaml` (gated by helm lint + terraform validate) | ✔ accepted into `services/notifications` |
+| kind cluster + `terraform apply` (stack `local`): namespaces (PSA restricted), quotas, limit ranges, PostgreSQL StatefulSets, DB secrets, metrics-server | ✔ (after the PSA fix below) |
+| `pipeline.sh build` → SHA-tagged images loaded into kind | ✔ |
+| `pipeline.sh deploy-staging` → AI env-config (cost-sensitive) → server-side-validated render → helm → health gate | ✔ healthy |
+| `pipeline.sh verify-staging` | ✔ 7/7 |
+| `pipeline.sh promote-production` → HA profile (2+2 replicas, HPA, PDB, spread) → health gate → smoke | ✔ 7/7 |
+| `pipeline.sh demo-rollback` (broken backend image) | ✔ detected (2 critical findings), **auto-rolled back** rev 3 → rev 2, incident report written, stage failed with exit code 2 |
+| `pipeline.sh preview "deploy-preview/feature-x"` → smoke → `"/destroy-preview feature-x"` | ✔ deployed (embedded DB), 7/7, then uninstalled and namespace deleted |
+
+**Caveat: the ingress hop.** The network this was built on couldn't download the ingress-nginx
+*controller* image from `registry.k8s.io`: its CDN was unreachable, and the webhook image took 29 minutes. The
+Kubernetes runs above therefore reached the app through `kubectl port-forward` to the frontend Service
+(`APP_BASE_URL=http://127.0.0.1:1808x`), whose nginx proxies `/api` and `/healthz` to the backend. Everything
+behind the ingress controller was exercised for real: Ingress objects, services, NetworkPolicies between
+frontend/backend/database, PSA, quotas, probes. The ingress-nginx Helm release itself is defined, validated
+and applied by Terraform, but it didn't become ready because of the image pull. On a normal connection,
+`scripts/pipeline.sh platform && scripts/pipeline.sh` uses `http://127.0.0.1:8080` with no overrides.
+
+**Bugs found and fixed by running for real:** container-level `runAsNonRoot=false` sent by the Terraform kubernetes
+provider (rejected by PSA `restricted`); a FastAPI dependency alias invisible under postponed annotations
+(`/readyz` → 422); offline `helm template` assuming Kubernetes v1.20; failed first installs that Helm relabels
+`superseded` being eligible rollback targets; a SPA fallback masking a missing `/healthz` proxy in compose; and
+Windows/Git Bash path handling in the scripts.
+
+**Not run:** the LLM path against a live Ollama model (not installed here); Azure DevOps itself (no
+organisation/agent; the YAML calls the same verified scripts); any cloud `plan`/`apply`.
 
 ---
 
