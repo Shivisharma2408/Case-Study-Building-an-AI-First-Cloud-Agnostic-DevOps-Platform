@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+*.env.local
+*.pem
+kubeconfig*
+
+# Terraform
+**/.terraform/
+.terraform-*/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+.state/
+# Lock files are committed for the applied local root only
+infra/terraform/providers/aws/.terraform.lock.hcl
+infra/terraform/providers/gcp/.terraform.lock.hcl
+
+# Pipeline / AI artifacts (published by the pipeline, not committed)
+artifacts/
+.tools/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
