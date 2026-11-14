@@ -14,6 +14,7 @@ env_name="${1:?usage: deploy.sh <staging|production>}"
 case "$env_name" in staging|production) ;; *) die "unknown environment '$env_name'" ;; esac
 namespace="$env_name"
 host="$(app_host "$env_name")"
+KUBE_CONTEXT="$(kube_context_for "$env_name")"
 tag="${IMAGE_TAG:-$(cat "$ARTIFACTS_DIR/image-tag" 2>/dev/null || image_tag)}"
 backend_tag="${BACKEND_IMAGE_TAG:-$tag}"   # override only used by the rollback demo
 
@@ -33,7 +34,12 @@ aiops env-config --environment "$env_name" --spec-file "deploy/env-specs/$env_na
 sed -n '1,6p' "$ai_values"
 
 values_args=(-f "$HELM_CHART/values-$env_name.yaml" -f "$ai_values"
-  --set "backend.image.tag=$backend_tag" --set "frontend.image.tag=$tag")
+  --set "backend.image.tag=$backend_tag" --set "frontend.image.tag=$tag" --set "ingress.host=$host")
+# Cloud: images come from the registry the build stage pushed to (ECR, Artifact Registry, ...).
+if [[ -n "${REGISTRY:-}" ]]; then
+  values_args+=(--set "backend.image.repository=$REGISTRY/idea-board-backend"
+    --set "frontend.image.repository=$REGISTRY/idea-board-frontend")
+fi
 
 section "Render manifests (chart schema + server-side validation)"
 helm_ctx template "$RELEASE_NAME" "$HELM_CHART" -n "$namespace" "${values_args[@]}" --validate > "$ARTIFACTS_DIR/manifests-$env_name.yaml"
@@ -47,14 +53,14 @@ helm_ctx upgrade --install "$RELEASE_NAME" "$HELM_CHART" -n "$namespace" "${valu
 
 section "AI: post-deploy health gate"
 health_args=(--namespace "$namespace" --release "$RELEASE_NAME" --context "$KUBE_CONTEXT"
-  --base-url "$(app_base_url)" --host "$host" --settle "${HEALTH_SETTLE_SECONDS:-5}")
+  --base-url "$(app_base_url "$env_name")" --host "$host" --settle "${HEALTH_SETTLE_SECONDS:-5}")
 (( deploy_failed )) && health_args+=(--deploy-failed)
 set +e
 aiops health "${health_args[@]}"
 rc=$?
 set -e
 case "$rc" in
-  0) ok "$env_name healthy: http://$host:$INGRESS_HTTP_PORT/" ;;
+  0) ok "$env_name healthy: http://$host (context $KUBE_CONTEXT)" ;;
   2) warn "$env_name was UNHEALTHY and has been rolled back automatically - see artifacts/incidents/"
      exit 2 ;;  # distinct code: the pipeline records the stage as rolledBack
   *) die "$env_name is UNHEALTHY and could not be rolled back automatically - see artifacts/incidents/" ;;

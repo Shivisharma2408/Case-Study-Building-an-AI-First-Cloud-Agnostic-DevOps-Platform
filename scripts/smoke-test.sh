@@ -8,7 +8,7 @@ require curl
 
 env_name="${1:?usage: smoke-test.sh <environment>}"
 host="${APP_HOST:-$(app_host "$env_name")}"
-base="${BASE_URL:-$(app_base_url)}"
+base="${BASE_URL:-$(app_base_url "$env_name")}"
 report="$ARTIFACTS_DIR/smoke-$env_name.txt"
 : > "$report"
 failures=0

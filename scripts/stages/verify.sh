@@ -5,16 +5,17 @@ source "$(dirname "$0")/../lib.sh"
 cd "$REPO_ROOT"
 
 env_name="${1:?usage: verify.sh <staging|production>}"
+KUBE_CONTEXT="$(kube_context_for "$env_name")"
 section "Smoke tests: $env_name"
 if "$REPO_ROOT/scripts/smoke-test.sh" "$env_name"; then
-  ok "$env_name verified: http://$(app_host "$env_name"):$INGRESS_HTTP_PORT/"
+  ok "$env_name verified: http://$(app_host "$env_name") via $(app_base_url "$env_name")"
   exit 0
 fi
 
 section "Smoke tests failed - running health gate (may roll back)"
 set +e
 aiops health --namespace "$env_name" --release "$RELEASE_NAME" --context "$KUBE_CONTEXT" \
-  --base-url "$(app_base_url)" --host "$(app_host "$env_name")" --deploy-failed
+  --base-url "$(app_base_url "$env_name")" --host "$(app_host "$env_name")" --deploy-failed
 rc=$?
 set -e
 if (( rc == 2 )); then

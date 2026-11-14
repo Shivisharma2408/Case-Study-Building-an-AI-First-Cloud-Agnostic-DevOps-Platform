@@ -104,13 +104,27 @@ image_tag() {
 kubectl_ctx() { kubectl --context "$KUBE_CONTEXT" "$@"; }
 helm_ctx() { helm --kube-context "$KUBE_CONTEXT" "$@"; }
 
-# Where the ingress is reachable. Override APP_BASE_URL for a cloud load balancer
-# (or any other front door); the Host header still selects the environment.
-app_base_url() { echo "${APP_BASE_URL:-http://127.0.0.1:$INGRESS_HTTP_PORT}"; }
+# ---- per-environment settings ------------------------------------------------------------
+# Every value can be overridden per environment with an upper-cased suffix, e.g.
+#   KUBE_CONTEXT_PRODUCTION, APP_BASE_URL_STAGING
+# (in the cloud, staging and production are separate clusters behind separate load balancers).
+env_setting() { # <VAR> <environment> <default>
+  local specific="${1}_$(tr '[:lower:]-' '[:upper:]_' <<<"$2")"
+  echo "${!specific:-${!1:-$3}}"
+}
 
+# kube context of an environment (local: both namespaces live in the one kind cluster)
+kube_context_for() { env_setting KUBE_CONTEXT "$1" "kind-$KIND_CLUSTER_NAME"; }
+
+# Where the environment's ingress is reachable: kind host port locally, the cloud load balancer
+# (or a port-forward) otherwise. The Host header still selects the environment.
+app_base_url() { env_setting APP_BASE_URL "${1:-}" "http://127.0.0.1:$INGRESS_HTTP_PORT"; }
+
+# Public hostname. APP_DOMAIN=ideaboard.example.com -> staging.ideaboard.example.com / ideaboard.example.com
 app_host() {
+  local domain="${APP_DOMAIN:-ideaboard.localhost}"
   case "$1" in
-    production) echo "ideaboard.localhost" ;;
-    *) echo "$1.ideaboard.localhost" ;;
+    production) echo "$domain" ;;
+    *) echo "$1.$domain" ;;
   esac
 }
