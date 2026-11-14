@@ -15,5 +15,10 @@ section "Smoke tests failed - running health gate (may roll back)"
 set +e
 aiops health --namespace "$env_name" --release "$RELEASE_NAME" --context "$KUBE_CONTEXT" \
   --base-url "$(app_base_url)" --host "$(app_host "$env_name")" --deploy-failed
+rc=$?
 set -e
+if (( rc == 2 )); then
+  warn "verification of $env_name failed - release rolled back automatically"
+  exit 2   # distinct code: the pipeline records the stage as rolledBack
+fi
 die "verification of $env_name failed"

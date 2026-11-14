@@ -31,6 +31,8 @@ variables:
   OLLAMA_HOST: http://localhost:11434
   OLLAMA_MODEL: llama3.2:3b
   KIND_CLUSTER_NAME: idea-board
+  # Azure Environments (idea-board-production) provide the approval gate in CI.
+  PIPELINE_APPROVAL: auto
   isMain: $[ eq(variables['Build.SourceBranch'], 'refs/heads/main') ]
   isPreviewBranch: $[ startsWith(variables['Build.SourceBranch'], 'refs/heads/deploy-preview/') ]
 

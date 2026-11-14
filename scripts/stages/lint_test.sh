@@ -13,6 +13,8 @@ fi
 section "Python: ruff (backend + ai)"
 "$PY" -m ruff check backend ai
 "$PY" -m ruff format --check backend ai
+"$PY" -m ruff check --config ai/pyproject.toml scripts/runstate.py
+"$PY" -m ruff format --check --config ai/pyproject.toml scripts/runstate.py
 
 section "Backend: pytest"
 (cd backend && "$PY" -m pytest)
@@ -20,8 +22,8 @@ section "Backend: pytest"
 section "AI tooling: pytest (validators, fallbacks, health gate)"
 (cd ai && "$PY" -m pytest)
 
-section "Frontend: eslint + typecheck + build"
-(cd frontend && { [[ -d node_modules ]] || npm ci --no-audit --no-fund; } && npm run lint && npm run build)
+section "Frontend: eslint + vitest + typecheck + build"
+(cd frontend && { [[ -d node_modules ]] || npm ci --no-audit --no-fund; } && npm run lint && npm test && npm run build)
 
 section "docker compose config"
 if has docker; then

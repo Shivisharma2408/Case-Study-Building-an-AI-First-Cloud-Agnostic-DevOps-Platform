@@ -55,6 +55,7 @@ rc=$?
 set -e
 case "$rc" in
   0) ok "$env_name healthy: http://$host:$INGRESS_HTTP_PORT/" ;;
-  2) die "$env_name was UNHEALTHY and has been rolled back automatically - see artifacts/incidents/" ;;
+  2) warn "$env_name was UNHEALTHY and has been rolled back automatically - see artifacts/incidents/"
+     exit 2 ;;  # distinct code: the pipeline records the stage as rolledBack
   *) die "$env_name is UNHEALTHY and could not be rolled back automatically - see artifacts/incidents/" ;;
 esac
