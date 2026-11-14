@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "runId": "20261114-113000-a1b2",
+  "runNumber": "20261114.3",
+  "pipeline": "idea-board",
+  "branch": "deploy-preview/login-page",
+  "commit": "aec907b1f73e",
+  "commitMessage": "dev: publish postgres on loopback",
+  "trigger": "pr-comment",
+  "triggerDetail": "/deploy-preview login-page with 2 backend replicas",
+  "startedAt": "2026-11-14T11:30:00Z",
+  "finishedAt": null,
+  "status": "waitingApproval",
+  "stages": [
+    { "name": "lint-test", "status": "succeeded", "startedAt": "2026-11-14T11:30:00Z", "finishedAt": "2026-11-14T11:33:10Z",
+      "jobs": [{ "name": "lint-test", "status": "succeeded", "startedAt": "2026-11-14T11:30:00Z", "finishedAt": "2026-11-14T11:33:10Z", "durationSec": 190, "logPath": "logs/lint-test.log" }] },
+    { "name": "build", "status": "succeeded", "startedAt": "2026-11-14T11:33:10Z", "finishedAt": "2026-11-14T11:33:44Z",
+      "jobs": [{ "name": "build", "status": "succeeded", "startedAt": "2026-11-14T11:33:10Z", "finishedAt": "2026-11-14T11:33:44Z", "durationSec": 34, "logPath": "logs/build.log" }] },
+    { "name": "deploy-staging", "status": "succeeded", "startedAt": "2026-11-14T11:33:44Z", "finishedAt": "2026-11-14T11:34:09Z",
+      "jobs": [{ "name": "deploy-staging", "status": "succeeded", "startedAt": "2026-11-14T11:33:44Z", "finishedAt": "2026-11-14T11:34:09Z", "durationSec": 25, "logPath": "logs/deploy-staging.log" }] },
+    { "name": "verify-staging", "status": "succeeded", "startedAt": "2026-11-14T11:34:09Z", "finishedAt": "2026-11-14T11:34:12Z",
+      "jobs": [{ "name": "verify-staging", "status": "succeeded", "startedAt": "2026-11-14T11:34:09Z", "finishedAt": "2026-11-14T11:34:12Z", "durationSec": 3, "logPath": "logs/verify-staging.log" }] },
+    { "name": "promote-production", "status": "waitingApproval", "startedAt": "2026-11-14T11:34:12Z", "finishedAt": null,
+      "jobs": [
+        { "name": "deploy-production", "status": "pending", "startedAt": null, "finishedAt": null, "durationSec": null, "logPath": "logs/deploy-production.log" },
+        { "name": "verify-production", "status": "pending", "startedAt": null, "finishedAt": null, "durationSec": null, "logPath": "logs/verify-production.log" }
+      ] }
+  ],
+  "approval": { "stage": "promote-production", "decision": null, "requestedAt": "2026-11-14T11:34:12Z", "decidedAt": null, "decidedBy": null, "comment": null },
+  "aiArtifacts": [
+    {
+      "id": "20261114T113350Z-env-config-staging.json", "kind": "helm-values", "feature": "env-config-staging", "stage": "deploy-staging",
+      "source": "fallback", "model": "llama3.2:3b",
+      "prompt": "You are a Kubernetes capacity planner...\n\nEnvironment: staging\nGoal: Cost-sensitive staging environment...",
+      "output": { "profile": "cost-sensitive", "rationale": "Deterministic cost-sensitive profile: single replicas, small requests, no autoscaling." },
+      "validation": { "passed": null, "errors": [] },
+      "fallbackReason": "LLM unavailable: Ollama not reachable at http://localhost:11434",
+      "timestamp": "2026-11-14T11:33:50Z"
+    },
+    {
+      "id": "20261114T113352Z-preview-plan-deploy.json", "kind": "deploy-plan", "feature": "preview-plan-deploy", "stage": "deploy-staging",
+      "source": "llm", "model": "qwen2.5-coder:3b",
+      "prompt": "You are a deployment planner for a Kubernetes platform...\nDeveloper request: with 2 backend replicas",
+      "output": [
+        { "description": "Install or upgrade the self-contained preview release", "argv": ["helm", "upgrade", "--install", "idea-board-login-page", "deploy/helm/idea-board", "-n", "preview-login-page", "--create-namespace", "-f", "deploy/helm/idea-board/values-preview.yaml", "--set", "backend.replicaCount=2", "--set", "backend.image.tag=aec907b1f73e", "--set", "frontend.image.tag=aec907b1f73e", "--wait", "--timeout", "5m"] },
+        { "description": "Wait for the backend rollout", "argv": ["kubectl", "rollout", "status", "deployment/idea-board-login-page-backend", "-n", "preview-login-page", "--timeout=120s"] }
+      ],
+      "validation": { "passed": true, "errors": [] }, "fallbackReason": null, "timestamp": "2026-11-14T11:33:52Z"
+    }
+  ],
+  "incident": null
+}

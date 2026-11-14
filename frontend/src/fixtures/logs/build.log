@@ -1,0 +1,10 @@
+[2026-11-14T09:15:14Z] job build started (stage build)
+==> Build images (tag a43c82a051bf)
+#12 exporting to image
+#12 naming to docker.io/library/idea-board-backend:a43c82a051bf done
+#14 naming to docker.io/library/idea-board-frontend:a43c82a051bf done
+==> Load images into kind cluster 'idea-board'
+Image: "idea-board-backend:a43c82a051bf" not yet present on node "idea-board-control-plane", loading...
+Image: "idea-board-frontend:a43c82a051bf" not yet present on node "idea-board-control-plane", loading...
+[ ok ] images idea-board-{backend,frontend}:a43c82a051bf
+[2026-11-14T09:15:46Z] job build finished with exit code 0

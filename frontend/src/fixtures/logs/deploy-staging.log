@@ -1,0 +1,17 @@
+[2026-11-14T09:15:46Z] job deploy-staging started (stage deploy-staging)
+==> AI: environment configuration for staging
+[AI] decision produced by local LLM 'llama3.2:3b' and passed validation.
+profile: cost-sensitive -> artifacts/generated/values-staging.ai.yaml
+==> Render manifests (chart schema + server-side validation)
+[ ok ] rendered 7 objects -> artifacts/manifests-staging.yaml
+==> helm upgrade --install idea-board (staging, image a43c82a051bf)
+Release "idea-board" has been upgraded. Happy Helming!
+STATUS: deployed
+REVISION: 2
+==> AI: post-deploy health gate
+waiting 5s for the release to settle...
+[AI] decision produced by local LLM 'llama3.2:3b' and passed validation.
+verdict: HEALTHY - healthy by rules
+summary: All pods ready with no restarts; synthetic probe 10/10 OK, p95 32 ms.
+[ ok ] staging healthy: http://staging.ideaboard.localhost:8080/
+[2026-11-14T09:16:12Z] job deploy-staging finished with exit code 0

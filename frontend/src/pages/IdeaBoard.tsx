@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
-import { createIdea, fetchIdeas, type Idea, MAX_IDEA_LENGTH } from "./api";
+import { createIdea, fetchIdeas, type Idea, MAX_IDEA_LENGTH } from "../api";
 
 type LoadState = "loading" | "ready" | "error";
 
@@ -8,7 +8,7 @@ const dateFormat = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 });
 
-export default function App() {
+export default function IdeaBoard() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [draft, setDraft] = useState("");

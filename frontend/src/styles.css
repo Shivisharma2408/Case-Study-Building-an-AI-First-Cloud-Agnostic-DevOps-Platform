@@ -63,3 +63,25 @@ button.secondary { background: transparent; color: var(--accent); border: 1px so
 .ideas { list-style: none; padding: 0; display: grid; gap: 12px; }
 .ideas p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ideas time { color: var(--muted); font-size: 0.8rem; }
+
+/* App navigation (shared by the Ideas and Pipelines pages) */
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+  height: 44px;
+  background: #1f2328;
+  color: #fff;
+  font-size: 0.9rem;
+}
+.app-nav-brand { font-weight: 600; margin-right: 16px; }
+.app-nav a {
+  color: #d0d7de;
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.app-nav a:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.app-nav a.active { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.app-loading { padding: 24px; color: var(--muted); }

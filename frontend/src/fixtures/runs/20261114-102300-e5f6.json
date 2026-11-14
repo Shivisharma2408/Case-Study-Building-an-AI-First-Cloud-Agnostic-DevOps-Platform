@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "runId": "20261114-102300-e5f6",
+  "runNumber": "20261114.2",
+  "pipeline": "idea-board",
+  "branch": "main",
+  "commit": "1f04546c0d21",
+  "commitMessage": "feat: bump backend image",
+  "trigger": "manual",
+  "triggerDetail": "scripts/pipeline.sh",
+  "startedAt": "2026-11-14T10:23:00Z",
+  "finishedAt": "2026-11-14T10:28:52Z",
+  "status": "rolledBack",
+  "stages": [
+    { "name": "lint-test", "status": "succeeded", "startedAt": "2026-11-14T10:23:00Z", "finishedAt": "2026-11-14T10:26:05Z",
+      "jobs": [{ "name": "lint-test", "status": "succeeded", "startedAt": "2026-11-14T10:23:00Z", "finishedAt": "2026-11-14T10:26:05Z", "durationSec": 185, "logPath": "logs/lint-test.log" }] },
+    { "name": "build", "status": "succeeded", "startedAt": "2026-11-14T10:26:05Z", "finishedAt": "2026-11-14T10:26:51Z",
+      "jobs": [{ "name": "build", "status": "succeeded", "startedAt": "2026-11-14T10:26:05Z", "finishedAt": "2026-11-14T10:26:51Z", "durationSec": 46, "logPath": "logs/build.log" }] },
+    { "name": "deploy-staging", "status": "rolledBack", "startedAt": "2026-11-14T10:26:51Z", "finishedAt": "2026-11-14T10:28:52Z",
+      "jobs": [{ "name": "deploy-staging", "status": "rolledBack", "startedAt": "2026-11-14T10:26:51Z", "finishedAt": "2026-11-14T10:28:52Z", "durationSec": 121, "logPath": "logs/deploy-staging.log" }] },
+    { "name": "verify-staging", "status": "skipped", "startedAt": null, "finishedAt": null,
+      "jobs": [{ "name": "verify-staging", "status": "skipped", "startedAt": null, "finishedAt": null, "durationSec": null, "logPath": "logs/verify-staging.log" }] },
+    { "name": "promote-production", "status": "skipped", "startedAt": null, "finishedAt": null,
+      "jobs": [
+        { "name": "deploy-production", "status": "skipped", "startedAt": null, "finishedAt": null, "durationSec": null, "logPath": "logs/deploy-production.log" },
+        { "name": "verify-production", "status": "skipped", "startedAt": null, "finishedAt": null, "durationSec": null, "logPath": "logs/verify-production.log" }
+      ] }
+  ],
+  "approval": null,
+  "aiArtifacts": [
+    {
+      "id": "20261114T102655Z-env-config-staging.json", "kind": "helm-values", "feature": "env-config-staging", "stage": "deploy-staging",
+      "source": "fallback", "model": "llama3.2:3b",
+      "prompt": "You are a Kubernetes capacity planner...\n\nEnvironment: staging\nGoal: Cost-sensitive staging environment...",
+      "output": { "profile": "cost-sensitive", "rationale": "Deterministic cost-sensitive profile: single replicas, small requests, no autoscaling." },
+      "validation": { "passed": null, "errors": [] },
+      "fallbackReason": "LLM unavailable: Ollama not reachable at http://localhost:11434",
+      "timestamp": "2026-11-14T10:26:55Z"
+    },
+    {
+      "id": "20261114T102850Z-health-staging.json", "kind": "health-summary", "feature": "health-staging", "stage": "deploy-staging",
+      "source": "fallback", "model": "llama3.2:3b",
+      "prompt": "You are an SRE assistant analysing a Kubernetes release right after deployment...",
+      "output": { "healthy": false, "confidence": 1.0,
+        "summary": "Release 'idea-board' in 'staging' is UNHEALTHY: 2 critical finding(s). - helm upgrade --wait did not converge (timeout or failed resources). - pod idea-board-backend-668c4cc9b7-5xnsx is waiting: ImagePullBackOff.",
+        "suspected_cause": "pod idea-board-backend-668c4cc9b7-5xnsx is waiting: ImagePullBackOff", "recommended_action": "rollback",
+        "evidence": ["helm upgrade --wait did not converge", "pod idea-board-backend-668c4cc9b7-5xnsx is waiting: ImagePullBackOff"] },
+      "validation": { "passed": null, "errors": [] },
+      "fallbackReason": "LLM unavailable: Ollama not reachable at http://localhost:11434",
+      "timestamp": "2026-11-14T10:28:50Z"
+    }
+  ],
+  "incident": {
+    "summary": "Release 'idea-board' in 'staging' is UNHEALTHY: 2 critical finding(s). - helm upgrade --wait did not converge (timeout or failed resources). - pod idea-board-backend-668c4cc9b7-5xnsx is waiting: ImagePullBackOff.",
+    "report": "# Incident: idea-board in staging\n\n- **Decision:** ROLLBACK - rules: 2 critical finding(s) (authoritative)\n- **Rollback:** rolled back to revision 2 successfully\n"
+  }
+}

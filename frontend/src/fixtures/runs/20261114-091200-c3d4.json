@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "runId": "20261114-091200-c3d4",
+  "runNumber": "20261114.1",
+  "pipeline": "idea-board",
+  "branch": "main",
+  "commit": "a43c82a051bf",
+  "commitMessage": "fix: PSA-compliant postgres securityContext",
+  "trigger": "ci",
+  "triggerDetail": "Azure Pipelines IndividualCI",
+  "startedAt": "2026-11-14T09:12:00Z",
+  "finishedAt": "2026-11-14T09:19:41Z",
+  "status": "succeeded",
+  "stages": [
+    { "name": "lint-test", "status": "succeeded", "startedAt": "2026-11-14T09:12:00Z", "finishedAt": "2026-11-14T09:15:14Z",
+      "jobs": [{ "name": "lint-test", "status": "succeeded", "startedAt": "2026-11-14T09:12:00Z", "finishedAt": "2026-11-14T09:15:14Z", "durationSec": 194, "logPath": "logs/lint-test.log" }] },
+    { "name": "build", "status": "succeeded", "startedAt": "2026-11-14T09:15:14Z", "finishedAt": "2026-11-14T09:15:46Z",
+      "jobs": [{ "name": "build", "status": "succeeded", "startedAt": "2026-11-14T09:15:14Z", "finishedAt": "2026-11-14T09:15:46Z", "durationSec": 32, "logPath": "logs/build.log" }] },
+    { "name": "deploy-staging", "status": "succeeded", "startedAt": "2026-11-14T09:15:46Z", "finishedAt": "2026-11-14T09:16:12Z",
+      "jobs": [{ "name": "deploy-staging", "status": "succeeded", "startedAt": "2026-11-14T09:15:46Z", "finishedAt": "2026-11-14T09:16:12Z", "durationSec": 26, "logPath": "logs/deploy-staging.log" }] },
+    { "name": "verify-staging", "status": "succeeded", "startedAt": "2026-11-14T09:16:12Z", "finishedAt": "2026-11-14T09:16:15Z",
+      "jobs": [{ "name": "verify-staging", "status": "succeeded", "startedAt": "2026-11-14T09:16:12Z", "finishedAt": "2026-11-14T09:16:15Z", "durationSec": 3, "logPath": "logs/verify-staging.log" }] },
+    { "name": "promote-production", "status": "succeeded", "startedAt": "2026-11-14T09:16:15Z", "finishedAt": "2026-11-14T09:19:41Z",
+      "jobs": [
+        { "name": "deploy-production", "status": "succeeded", "startedAt": "2026-11-14T09:19:12Z", "finishedAt": "2026-11-14T09:19:39Z", "durationSec": 27, "logPath": "logs/deploy-production.log" },
+        { "name": "verify-production", "status": "succeeded", "startedAt": "2026-11-14T09:19:39Z", "finishedAt": "2026-11-14T09:19:41Z", "durationSec": 2, "logPath": "logs/verify-production.log" }
+      ] }
+  ],
+  "approval": { "stage": "promote-production", "decision": "approved", "requestedAt": "2026-11-14T09:16:15Z", "decidedAt": "2026-11-14T09:19:10Z", "decidedBy": "anonymous (no auth - local demo)", "comment": "staging looks good" },
+  "aiArtifacts": [
+    {
+      "id": "20261114T091550Z-env-config-staging.json", "kind": "helm-values", "feature": "env-config-staging", "stage": "deploy-staging",
+      "source": "llm", "model": "llama3.2:3b",
+      "prompt": "You are a Kubernetes capacity planner...\n\nEnvironment: staging\nGoal: Cost-sensitive staging environment...",
+      "output": { "profile": "cost-sensitive", "rationale": "Staging carries almost no traffic: one replica each, small requests, no autoscaling.",
+        "backend": { "replicaCount": 1, "resources": { "requests": { "cpu": "50m", "memory": "96Mi" }, "limits": { "cpu": "250m", "memory": "192Mi" } },
+          "autoscaling": { "enabled": false, "minReplicas": 1, "maxReplicas": 2, "targetCPUUtilizationPercentage": 70 }, "podDisruptionBudget": { "enabled": false, "minAvailable": 1 } },
+        "frontend": { "replicaCount": 1, "resources": { "requests": { "cpu": "10m", "memory": "32Mi" }, "limits": { "cpu": "100m", "memory": "64Mi" } },
+          "autoscaling": { "enabled": false, "minReplicas": 1, "maxReplicas": 2, "targetCPUUtilizationPercentage": 70 }, "podDisruptionBudget": { "enabled": false, "minAvailable": 1 } },
+        "topologySpread": false },
+      "validation": { "passed": true, "errors": [] }, "fallbackReason": null, "timestamp": "2026-11-14T09:15:50Z"
+    },
+    {
+      "id": "20261114T091608Z-health-staging.json", "kind": "health-summary", "feature": "health-staging", "stage": "deploy-staging",
+      "source": "llm", "model": "llama3.2:3b",
+      "prompt": "You are an SRE assistant analysing a Kubernetes release right after deployment...",
+      "output": { "healthy": true, "confidence": 0.93, "summary": "All pods ready with no restarts; synthetic probe 10/10 OK, p95 32 ms. No error logs since rollout.",
+        "suspected_cause": "", "recommended_action": "none", "evidence": ["probe 10/10 200", "0 restarts"] },
+      "validation": { "passed": true, "errors": [] }, "fallbackReason": null, "timestamp": "2026-11-14T09:16:08Z"
+    },
+    {
+      "id": "20261114T091915Z-env-config-production.json", "kind": "helm-values", "feature": "env-config-production", "stage": "promote-production",
+      "source": "fallback", "model": "llama3.2:3b",
+      "prompt": "You are a Kubernetes capacity planner...\n\nEnvironment: production\nGoal: High-availability production environment...",
+      "rawOutput": "{\"profile\":\"high-availability\",\"backend\":{\"replicaCount\":1}}",
+      "output": { "profile": "high-availability", "rationale": "Deterministic HA profile: >=2 replicas, HPA, PodDisruptionBudgets and spread across nodes.",
+        "backend": { "replicaCount": 2 }, "frontend": { "replicaCount": 2 }, "topologySpread": true },
+      "validation": { "passed": false, "errors": ["<root>: 'rationale' is a required property", "backend: high-availability requires at least 2 replicas"] },
+      "fallbackReason": "LLM output rejected by validation: <root>: 'rationale' is a required property; backend: high-availability requires at least 2 replicas",
+      "timestamp": "2026-11-14T09:19:15Z"
+    }
+  ],
+  "incident": null
+}

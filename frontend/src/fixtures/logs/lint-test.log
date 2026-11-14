@@ -1,0 +1,18 @@
+[2026-11-14T09:12:00Z] job lint-test started (stage lint-test)
+==> Python: ruff (backend + ai)
+All checks passed!
+==> Backend: pytest
+30 passed, 1 warning in 2.34s
+==> AI tooling: pytest (validators, fallbacks, health gate)
+87 passed in 0.30s
+==> Frontend: eslint + typecheck + build
+✓ built in 1.21s
+==> docker compose config
+[ ok ] docker-compose.yml is valid
+==> Helm: lint (all environment value sets) + render
+1 chart(s) linted, 0 chart(s) failed
+==> Terraform: fmt + validate (local, aws, gcp roots)
+[ ok ] variables-common.tf identical across provider roots
+Success! The configuration is valid.
+[ ok ] lint-test stage passed
+[2026-11-14T09:15:14Z] job lint-test finished with exit code 0

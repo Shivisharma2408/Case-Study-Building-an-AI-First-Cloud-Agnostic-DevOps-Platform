@@ -1,0 +1,11 @@
+[2026-11-14T09:16:12Z] job verify-staging started (stage verify-staging)
+==> Smoke tests: staging
+[ ok ] GET /healthz returns 200 with {"status":"ok"} (got 200)
+[ ok ] POST /api/ideas returns 201 (got 201)
+[ ok ] POST response echoes the content
+[ ok ] GET /api/ideas contains the new idea
+[ ok ] GET /api/ideas returns a JSON array
+[ ok ] POST blank content is rejected with 422 (got 422)
+[ ok ] GET / serves the React app
+[ ok ] all smoke checks passed for staging
+[2026-11-14T09:16:15Z] job verify-staging finished with exit code 0

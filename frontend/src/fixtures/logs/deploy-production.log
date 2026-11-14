@@ -1,0 +1,17 @@
+[2026-11-14T09:19:12Z] job deploy-production started (stage deploy-production)
+==> AI: environment configuration for production
+[AI] decision produced by local LLM 'llama3.2:3b' and passed validation.
+profile: high-availability -> artifacts/generated/values-production.ai.yaml
+==> Render manifests (chart schema + server-side validation)
+[ ok ] rendered 11 objects -> artifacts/manifests-production.yaml
+==> helm upgrade --install idea-board (production, image a43c82a051bf)
+Release "idea-board" has been upgraded. Happy Helming!
+STATUS: deployed
+REVISION: 2
+==> AI: post-deploy health gate
+waiting 5s for the release to settle...
+[AI] decision produced by local LLM 'llama3.2:3b' and passed validation.
+verdict: HEALTHY - healthy by rules
+summary: All pods ready with no restarts; synthetic probe 10/10 OK, p95 32 ms.
+[ ok ] production healthy: http://production.ideaboard.localhost:8080/
+[2026-11-14T09:19:39Z] job deploy-production finished with exit code 0
