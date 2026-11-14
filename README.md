@@ -233,10 +233,14 @@ bash scripts/pipeline.sh simulate                                  # cluster-fre
 point the health gate and smoke tests at a port-forward:
 
 ```bash
-kubectl -n staging    port-forward svc/idea-board-frontend 18081:8080 &
-kubectl -n production port-forward svc/idea-board-frontend 18082:8080 &
-APP_BASE_URL_STAGING=http://127.0.0.1:18081 APP_BASE_URL_PRODUCTION=http://127.0.0.1:18082 bash scripts/pipeline.sh
+bash scripts/port-forward.sh staging 18081 &       # self-healing tunnel (restarts when pods are replaced)
+bash scripts/port-forward.sh production 18082 &
+HEALTH_SETTLE_SECONDS=20 APP_BASE_URL_STAGING=http://127.0.0.1:18081 APP_BASE_URL_PRODUCTION=http://127.0.0.1:18082 \
+  bash scripts/pipeline.sh
 ```
+
+Don't use a plain `kubectl port-forward` for this. It stays bound to the replaced pod after a rollout, and the
+health gate then (correctly) rolls the release back (I-27).
 
 **Tear-down:** `kind delete cluster --name idea-board && rm -rf .state`
 
@@ -672,7 +676,7 @@ Every issue below was observed during implementation or verification, and resolv
 | I-24 | AWS module | First apply would fail with "Unauthorized" after the cluster was created | EKS API authentication mode without granting the creator access | `bootstrap_cluster_creator_admin_permissions = true` |
 | I-25 | AWS module | NLB IP targets require the AWS Load Balancer Controller | `nlb-target-type: ip` annotation without the controller | Annotation removed (in-tree NLB); controller documented as optional |
 | I-26 | Governance | An automated agent attempted to approve the production gate during verification | n/a (control working as intended) | Blocked by policy; production approval stays a human decision |
-| I-27 | Verification harness | Full run 20261114.8: health gate rolled staging back (`synthetic probe error rate 20% {'conn_error': 2}`) | The port-forward used instead of the ingress (I-15) is pinned to one pod and drops for about 2 s when Helm replaces the pods; the probe ran inside that gap | Gate behaved correctly (real errors were observed). With port-forwards, use `HEALTH_SETTLE_SECONDS=20`. Doesn't occur behind a real ingress controller |
+| I-27 | Verification harness | Full run 20261114.8: health gate rolled staging back (`synthetic probe error rate 20% {'conn_error': 2}`) | The port-forward used instead of the ingress (I-15) is pinned to one pod and drops for about 2 s when Helm replaces the pods; the probe ran inside that gap | Gate behaved correctly (real errors were observed). Added `scripts/port-forward.sh`, a watchdog that health-checks and restarts the tunnel (recovery measured at 7 s), plus `HEALTH_SETTLE_SECONDS=20`. Run #20261114.10 then passed. The script was later extended for preview Service names. Doesn't occur behind a real ingress controller |
 
 ---
 
