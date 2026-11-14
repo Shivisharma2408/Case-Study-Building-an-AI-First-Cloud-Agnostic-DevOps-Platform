@@ -34,6 +34,10 @@ services:
       DB_SSLMODE: disable
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MAX_IDEA_LENGTH: ${MAX_IDEA_LENGTH:-500}
+      # Pipelines page: runs written by scripts/pipeline.sh (read-only API + approval decisions).
+      PIPELINE_RUNS_DIR: /data/runs
+    volumes:
+      - ./artifacts/runs:/data/runs
     depends_on:
       postgres:
         condition: service_healthy

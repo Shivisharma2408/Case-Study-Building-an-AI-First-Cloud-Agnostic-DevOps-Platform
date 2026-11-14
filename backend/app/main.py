@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from .config import Settings, get_settings
 from .db import build_engine, run_migrations, session_scope, wait_for_database
 from .models import Idea
+from .pipelines import router as pipelines_router
 from .schemas import IdeaCreate, IdeaOut
 
 log = logging.getLogger("idea_board")
@@ -75,6 +76,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine.dispose()
 
     app = FastAPI(title="The Idea Board API", version="1.0.0", lifespan=lifespan)
+    app.state.pipeline_runs_dir = settings.pipeline_runs_dir
+    app.include_router(pipelines_router)
 
     @app.middleware("http")
     async def access_log(

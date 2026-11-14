@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     max_idea_length: int = Field(default=500, ge=1, le=10_000)
     log_level: str = "INFO"
 
+    # Pipeline runs directory (artifacts/runs). Unset: /api/pipelines reports no runs.
+    pipeline_runs_dir: str | None = None
+
     @property
     def sqlalchemy_url(self) -> str:
         if self.database_url:
