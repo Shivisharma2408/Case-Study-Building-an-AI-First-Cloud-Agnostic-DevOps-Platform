@@ -143,11 +143,11 @@ trigger_for() { # -> "<trigger>|<detail>"
     esac
     return
   fi
-  if [[ "$1" == preview ]]; then
-    if [[ "$2" == /* ]]; then echo "pr-comment|$2"; else echo "branch|$2"; fi
+  if [[ "${1:-}" == preview ]]; then
+    if [[ "${2:-}" == /* ]]; then echo "pr-comment|${2:-}"; else echo "branch|${2:-}"; fi
     return
   fi
-  echo "manual|scripts/pipeline.sh $*"
+  echo "manual|scripts/pipeline.sh ${*:-all}"
 }
 
 # ---------------------------------------------------------------------------------------------

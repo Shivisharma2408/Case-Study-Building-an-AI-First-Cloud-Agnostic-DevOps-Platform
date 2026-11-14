@@ -43,6 +43,9 @@ resource "aws_eks_cluster" "this" {
 
   access_config {
     authentication_mode = "API"
+    # Without this the identity running Terraform gets "Unauthorized" from the new cluster,
+    # and the kubernetes/helm providers fail on the first full apply.
+    bootstrap_cluster_creator_admin_permissions = true
   }
 
   encryption_config {

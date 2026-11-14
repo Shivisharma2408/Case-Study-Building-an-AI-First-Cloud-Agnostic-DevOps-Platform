@@ -22,9 +22,10 @@ output "platform" {
         service = {
           type = "LoadBalancer"
           annotations = {
-            "service.beta.kubernetes.io/aws-load-balancer-type"            = "nlb"
-            "service.beta.kubernetes.io/aws-load-balancer-scheme"          = "internet-facing"
-            "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type" = "ip"
+            "service.beta.kubernetes.io/aws-load-balancer-type"   = "nlb"
+            "service.beta.kubernetes.io/aws-load-balancer-scheme" = "internet-facing"
+            # "nlb-target-type: ip" would require the AWS Load Balancer Controller; the in-tree
+            # controller provisions an instance-target NLB from the two annotations above.
           }
         }
       }

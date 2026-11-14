@@ -1,444 +1,380 @@
-# The Idea Board: an AI-first, cloud-agnostic DevOps platform (local edition)
+# The Idea Board: AI-First, Cloud-Agnostic DevOps Platform
 
-A small full-stack app (React → FastAPI → PostgreSQL) and the platform that ships it:
-containers, cloud-agnostic Terraform, a hardened Helm chart, an Azure DevOps pipeline with
-an identical local runner, and **AI features that run on a free, local LLM (Ollama)**. Every AI
-feature falls back to deterministic logic when the LLM is missing.
-
-> **Local-only edition.** This implements the case study *"Building an AI-First, Cloud-Agnostic
-> DevOps Platform"* with these deliberate changes:
->
-> | Case study asks for | This repo does | Why |
-> |---|---|---|
-> | Deploy to two cloud providers, public URLs | Deploys to **two environments (`staging`, `production`) on a local kind cluster**, reachable on `localhost` through ingress-nginx | No paid resources. The same Terraform module graph has AWS and GCP implementations that pass `terraform validate` but are **not applied** |
-> | Managed PostgreSQL | In-cluster PostgreSQL StatefulSet behind a **database contract**; RDS / Cloud SQL modules implement the same contract | Swapping in a managed DB changes one variable |
-> | GitHub Actions / GitLab CI | **Azure Pipelines** (`azure-pipelines.yml`) + **local runner** (`scripts/pipeline.sh`), both calling the same stage scripts | Azure-hosted agents can't reach a laptop's kind cluster |
-> | An LLM | **Ollama** (default `llama3.2:3b`, configurable) | Free, local, no API keys |
+| Document | Platform Engineering: Solution Design & Operations Guide |
+|---|---|
+| Project | The Idea Board (case study: *Building an AI-First, Cloud-Agnostic DevOps Platform*) |
+| Version | 1.1 |
+| Status | Local environments **verified**. AWS and GCP **designed and validated, not provisioned** |
+| Last updated | 2026-11-14 |
+| Related documents | [`docs/TEST-RESULTS.md`](docs/TEST-RESULTS.md): recorded test and pipeline output |
 
 ---
 
 ## Contents
 
-1. [Architecture](#1-architecture)
-2. [Repository layout](#2-repository-layout)
-3. [Prerequisites](#3-prerequisites)
-4. [Run locally with Docker Compose](#4-run-locally-with-docker-compose)
-5. [Run on local Kubernetes (kind + Terraform + pipeline)](#5-run-on-local-kubernetes-kind--terraform--pipeline)
-   - [Pipelines page](#5a-pipelines-page-run-view-in-the-browser)
-6. [CI/CD: Azure Pipelines and the local runner](#6-cicd-azure-pipelines-and-the-local-runner)
-7. [AI Integration](#7-ai-integration)
-8. [Cloud-Agnostic Approach](#8-cloud-agnostic-approach)
-9. [Security and operational practices](#9-security-and-operational-practices)
-10. [What was verified](#10-what-was-verified)
-11. [Troubleshooting](#11-troubleshooting)
+1. [Executive summary](#1-executive-summary)
+2. [Scope and deviations from the case study](#2-scope-and-deviations-from-the-case-study)
+3. [Solution architecture](#3-solution-architecture)
+4. [Repository structure](#4-repository-structure)
+5. [Prerequisites](#5-prerequisites)
+6. [Running the solution locally](#6-running-the-solution-locally)
+7. [CI/CD pipeline](#7-cicd-pipeline)
+8. [Pipelines dashboard (`/pipelines`)](#8-pipelines-dashboard-pipelines)
+9. [AI integration](#9-ai-integration)
+10. [Cloud-agnostic design](#10-cloud-agnostic-design)
+11. [Cloud deployment runbook: AWS and GCP](#11-cloud-deployment-runbook-aws-and-gcp)
+12. [Security and compliance controls](#12-security-and-compliance-controls)
+13. [Verification summary](#13-verification-summary)
+14. [Issues register (problems encountered and resolutions)](#14-issues-register-problems-encountered-and-resolutions)
+15. [Known limitations and open items](#15-known-limitations-and-open-items)
+16. [Troubleshooting](#16-troubleshooting)
+17. [Configuration reference](#17-configuration-reference)
 
 ---
 
-## 1. Architecture
+## 1. Executive summary
 
-### Runtime
+The repository delivers:
+
+- **Application.** The Idea Board: a React (Vite + TypeScript) frontend, a FastAPI backend and PostgreSQL.
+- **Containers.** Multi-stage, non-root images and a Docker Compose stack for development.
+- **Infrastructure as Code.** Cloud-agnostic Terraform: one module graph with interchangeable implementations for
+  **local (kind)**, **AWS (EKS + RDS)** and **GCP (GKE + Cloud SQL)**, selected by a single `cloud` variable.
+- **Kubernetes packaging.** A hardened Helm chart: probes, resource limits, HPA, PDB, NetworkPolicies, Pod Security
+  `restricted`.
+- **CI/CD.** An Azure DevOps pipeline (`azure-pipelines.yml`) plus a local runner (`scripts/pipeline.sh`) that executes
+  **the same stage scripts**: lint/test → build → deploy staging → verify → approval → promote production.
+- **AI features (local, free).** Built on Ollama, each with schema validation, an audit trail and a deterministic
+  fallback:
+  - environment sizing from natural-language goals
+  - post-deploy health analysis with **automatic rollback** and incident reports
+  - allowlist-validated command generation for preview environments
+  - generative IaC gated by `helm lint` and `terraform validate`
+- **Pipelines dashboard.** An Azure-DevOps-style run view at `/pipelines`: live stages, job logs, approval gate, AI
+  decisions and rollback banner.
+
+All local deliverables were executed end to end on the target workstation. Evidence is in
+[`docs/TEST-RESULTS.md`](docs/TEST-RESULTS.md); the problems found along the way are in the
+[issues register](#14-issues-register-problems-encountered-and-resolutions).
+
+---
+
+## 2. Scope and deviations from the case study
+
+The following constraints were agreed and override the original case study:
+
+| Case study requirement | Implemented as | Rationale |
+|---|---|---|
+| Deploy to two cloud providers with public URLs | Two environments, **`staging` and `production`**, on a local **kind** cluster, reachable on `localhost` through ingress-nginx (port 8080) | No paid resources. The AWS and GCP implementations exist and pass `terraform validate`, but are **not applied** |
+| Managed PostgreSQL | In-cluster PostgreSQL StatefulSet behind a database contract. RDS and Cloud SQL modules implement the same contract | A managed database is a one-variable change (`database.mode = "managed"`) |
+| GitHub Actions / GitLab CI | **Azure Pipelines** plus an identical **local runner** | Hosted agents can't reach a workstation's cluster. A self-hosted agent or the local runner covers this |
+| Hosted LLM | **Ollama** (default `llama3.2:3b`) with a deterministic fallback | Free, local, no API keys. The pipeline never depends on AI availability |
+
+---
+
+## 3. Solution architecture
+
+### 3.1 Runtime view (local)
 
 ```mermaid
 flowchart LR
   user([Browser / curl]) -->|"http://ideaboard.localhost:8080<br/>http://staging.ideaboard.localhost:8080"| hostport["127.0.0.1:8080<br/>(kind extraPortMapping)"]
-  subgraph kind["kind cluster: idea-board (single node)"]
+  subgraph kind["kind cluster: idea-board"]
     direction LR
-    hostport --> ing["ingress-nginx<br/>(hostPort 80)"]
-    subgraph prod["namespace: production (PSA restricted, quota)"]
-      fe1["frontend<br/>nginx-unprivileged ×2"] -->|/api proxy| be1["backend<br/>FastAPI ×2..4 (HPA)"]
-      be1 -->|"Secret idea-board-db"| db1[("PostgreSQL<br/>StatefulSet + PVC")]
+    hostport --> ing["ingress-nginx"]
+    subgraph prod["namespace production (PSA restricted, quota)"]
+      fe1["frontend ×2"] -->|/api| be1["backend ×2..4 (HPA)"]
+      be1 -->|"Secret idea-board-db"| db1[("PostgreSQL StatefulSet")]
     end
-    subgraph stg["namespace: staging (PSA restricted, quota)"]
+    subgraph stg["namespace staging (PSA restricted, quota)"]
       fe2["frontend ×1"] --> be2["backend ×1"]
-      be2 --> db2[("PostgreSQL")]
+      be2 --> db2[("PostgreSQL StatefulSet")]
     end
-    ing -->|"/ "| fe1
-    ing -->|"/api, /healthz"| be1
-    ing --> fe2
-    ing --> be2
-    ms["metrics-server"] -.-> be1
+    ing --> fe1 & be1 & fe2 & be2
   end
 ```
 
-* **Frontend:** Vite + React + TypeScript, built into static files and served by
-  `nginx-unprivileged` (uid 101, read-only root FS). Its nginx also proxies `/api` so the same
-  image works under docker-compose.
-* **Backend:** FastAPI + SQLAlchemy 2 + psycopg 3. `GET/POST /api/ideas`, `/healthz`
-  (liveness, no DB), `/readyz` (DB ping). It validates input (trimmed, non-empty, ≤ 500 chars, no control
-  characters, no unknown fields) and writes JSON logs. SQL migrations run at start-up under a
-  PostgreSQL advisory lock, so several replicas can start at once safely.
-* **Database:** PostgreSQL 16 with `ideas(id BIGSERIAL, content TEXT, created_at TIMESTAMPTZ)`
-  (`backend/app/migrations/001_create_ideas.sql`).
-* **NetworkPolicies:** ingress-nginx → frontend/backend, frontend → backend, backend →
-  PostgreSQL + DNS. The database accepts connections only from backend pods.
+| Component | Technology | Notes |
+|---|---|---|
+| Frontend | React 18, Vite, TypeScript, React Router; served by `nginx-unprivileged` (uid 101) | Pages: `/` (Idea Board), `/pipelines` (run view). nginx proxies `/api`, `/healthz`, `/readyz` |
+| Backend | FastAPI, SQLAlchemy 2, psycopg 3 (uid 10001) | `GET/POST /api/ideas`, `/healthz` (liveness), `/readyz` (DB), read-only `/api/pipelines/*`. Input validation: trimmed, 1–500 chars, no control characters, no unknown fields. JSON logs |
+| Database | PostgreSQL 16 | `ideas(id BIGSERIAL, content TEXT, created_at TIMESTAMPTZ)`. Migrations run at start-up under an advisory lock |
+| Ingress | ingress-nginx (Helm, via Terraform) | Single entry point. `services.loadbalancers=0` in app namespaces |
+| Network | Kubernetes NetworkPolicies | ingress → frontend/backend, frontend → backend, backend → database + DNS only |
 
-### Delivery
+### 3.2 Delivery view
 
 ```mermaid
 flowchart LR
-  subgraph ci["azure-pipelines.yml  ≡  scripts/pipeline.sh"]
-    A[lint-test<br/>ruff · pytest · eslint · build<br/>compose config · helm lint · tf validate] --> B[build<br/>SHA-tagged images → kind load]
-    B --> C[deploy-staging]
-    C --> D[verify-staging<br/>smoke tests via ingress]
-    D --> E[promote-production<br/>same image tag]
-    B --> P[preview<br/>deploy-preview/*]
-  end
-  subgraph ai["AI (Ollama, local) - validated, audited, with deterministic fallback"]
-    EC[env-config<br/>goal text → Helm values]
-    HG[health gate<br/>signals → verdict → auto-rollback + incident]
-    PL[command generation<br/>trigger → allowlisted kubectl/helm plan]
-    GI[generative IaC<br/>service spec → values + TF stub]
-  end
-  C -.-> EC
-  C -.-> HG
-  E -.-> EC
-  E -.-> HG
-  P -.-> PL
-  T[terraform apply<br/>stack: local] --> K[(kind: ingress, metrics-server,<br/>namespaces, quotas, PostgreSQL, DB secrets)]
+  A[lint-test] --> B[build<br/>SHA-tagged images] --> C[deploy-staging] --> D[verify-staging] --> G{approval} --> E[promote-production<br/>same image tag]
+  B --> P[preview<br/>deploy-preview/*]
+  C -. AI env-config + health gate .-> C
+  E -. AI env-config + health gate .-> E
+  P -. AI command generation .-> P
+  T[terraform apply] --> K[(platform: ingress, metrics-server,<br/>namespaces, quotas, database, secrets)]
 ```
 
-**Ownership split:** Terraform owns the *platform* (ingress, add-ons, namespaces, quotas, the
-database and its credentials Secret). The pipeline owns *application releases*
-(`helm upgrade` / `helm rollback`). Image tags change on every commit, so keeping releases out of
-Terraform state avoids constant drift, and the AI health gate can roll back without fighting Terraform.
+**Ownership model.** Terraform owns the platform: ingress, add-ons, namespaces, quotas, databases and DB secrets.
+The pipeline owns application releases: `helm upgrade` and `helm rollback`. This keeps image-tag churn out of
+Terraform state, and lets the health gate roll back without fighting Terraform.
 
 ---
 
-## 2. Repository layout
+## 4. Repository structure
 
 ```
-├── backend/                     FastAPI app, SQL migrations, pytest suite, multi-stage Dockerfile
-├── frontend/                    Vite/React/TS app, ESLint, nginx template, multi-stage Dockerfile
-├── docker-compose.yml           postgres + backend + frontend with healthchecks
+├── backend/            FastAPI app (app/), SQL migrations, pipelines API, pytest suite, Dockerfile
+├── frontend/           React app (src/pages, src/pipelines, src/api, src/types, src/fixtures), Vitest, Playwright (e2e/)
+├── docker-compose.yml  postgres + backend + frontend with healthchecks
 ├── deploy/
-│   ├── kind/cluster.yaml        kind config (ingress port mapping)
-│   ├── env-specs/*.txt          natural-language goals per environment (input to AI env-config)
-│   └── helm/
-│       ├── idea-board/          app chart + values.schema.json + values-{staging,production,preview}.yaml
-│       └── service/             generic chart targeted by Generative IaC
+│   ├── kind/           kind cluster config (ingress port mapping)
+│   ├── env-specs/      natural-language environment goals (AI env-config input)
+│   └── helm/           idea-board chart (+ values-{staging,production,preview}.yaml), generic service chart
 ├── infra/terraform/
-│   ├── modules/
-│   │   ├── cluster/{kind,eks,gke}            ─┐ same output contract: name, platform{...}
-│   │   ├── database/{in-cluster,rds,cloudsql} ─┤ same output contract: connection{...}
-│   │   ├── ingress/                           ─┤ cloud-agnostic (helm provider)
-│   │   └── app/ (+ app/database-secret)       ─┘ cloud-agnostic (kubernetes provider)
-│   ├── providers/{local,aws,gcp}/   composition roots = the provider abstraction
-│   └── environments/{local,staging,production}/terraform.tfvars + <cloud>.tfvars
-├── ai/
-│   ├── aiops/                   llm · audit · commands (allowlist) · preview · envconfig · health · geniac · CLI
-│   ├── schemas/                 JSON Schemas that constrain and validate every LLM output
-│   ├── examples/                service spec for Generative IaC
-│   └── tests/                   validator / fallback / health-gate tests
-├── scripts/
-│   ├── pipeline.sh              local runner (same stages as Azure)
-│   ├── stages/*.sh              lint_test · build · deploy · verify · preview · generate_iac · platform
-│   ├── tf.sh                    Terraform wrapper: picks providers/<cloud> from the stack's tfvars
-│   ├── kind-up.sh · smoke-test.sh · install-tools.sh · lib.sh
-├── azure-pipelines.yml
-└── .env.example
+│   ├── modules/        cluster/{kind,eks,gke} · database/{in-cluster,rds,cloudsql} · ingress · app (+ database-secret)
+│   ├── providers/      composition roots per cloud: local · aws · gcp (shared variables-common.tf)
+│   └── environments/   local · staging · production  (terraform.tfvars + <cloud>.tfvars)
+├── ai/                 aiops package (llm, audit, commands, preview, envconfig, health, geniac), JSON schemas, tests
+├── scripts/            pipeline.sh (runner), stages/*.sh, runstate.py, tf.sh, kind-up.sh, smoke-test.sh, install-tools.sh, lib.sh
+├── services/           output of Generative IaC (example: notifications)
+├── docs/               TEST-RESULTS.md
+└── azure-pipelines.yml
 ```
 
 ---
 
-## 3. Prerequisites
+## 5. Prerequisites
 
-| Tool | Version used | Needed for |
+| Tool | Version verified | Required for |
 |---|---|---|
-| Docker (Desktop or Engine) + Compose v2 | 29.x / v2.30+ | everything |
+| Docker Desktop / Engine with Compose v2 | 29.9 / v5.7 | all |
 | kind | v0.26.0 | local Kubernetes |
-| kubectl | ≥ 1.30 | local Kubernetes |
-| helm | v3.16.x | chart lint/deploy |
-| terraform | ≥ 1.6 (1.9.8 used) | infrastructure |
-| Node.js | 20+ (22 LTS in the image) | frontend dev / lint |
-| Python | 3.11+ (3.12 used) | backend + AI tooling |
-| Ollama | any recent (structured outputs need ≥ 0.5) | **optional**: AI features fall back without it |
-| bash | Linux/macOS shell, or Git Bash on Windows | scripts |
+| kubectl | 1.36 (≥ 1.30) | local Kubernetes |
+| helm | v3.16.4 | chart lint/deploy |
+| terraform | 1.9.8 (≥ 1.6) | infrastructure |
+| Node.js | 26 (≥ 20; image uses 22 LTS) | frontend |
+| Python | 3.12 (≥ 3.11) | backend tests, AI tooling, run state |
+| Git Bash (Windows) or any POSIX shell | Git for Windows 2.56 | all `scripts/*.sh` |
+| Ollama | optional (≥ 0.5 for structured outputs) | AI features. Without it, deterministic fallbacks are used |
+| Cloud only | AWS CLI v2 **or** gcloud CLI (+ `gke-gcloud-auth-plugin`), Docker Buildx | section 11 |
 
-`scripts/install-tools.sh` can fetch pinned, SHA-256-verified **kind, helm and terraform** into
-`./.tools/bin` (git-ignored, picked up automatically by every script) if you'd rather not install
-them system-wide.
+> **Windows:** start every `scripts/*.sh` from **Git Bash**. In PowerShell, `bash` resolves to the WSL launcher, which
+> fails if no Linux distribution is installed (see issue I-21). From PowerShell, use
+> `& "C:\Program Files\Git\bin\bash.exe" scripts/pipeline.sh <stage>`.
 
-**Why kind?** It runs Kubernetes nodes as Docker containers. You already have Docker, so kind
-needs no VM or hypervisor. It's the upstream Kubernetes project's own conformance-test tool,
-starts in about 30 seconds, and maps ingress ports straight to `localhost`
-(`extraPortMappings`). Its CNI enforces NetworkPolicies (kind ≥ 0.24), so the policies
-in this repo are exercised for real. k3d is similar but ships Traefik and k3s; minikube needs a
-VM/driver and more resources.
+`scripts/install-tools.sh` downloads pinned, SHA-256-verified kind, helm and terraform into `./.tools/bin`, which the
+scripts pick up automatically.
 
----
-
-## 4. Run locally with Docker Compose
-
-```bash
-cp .env.example .env              # then edit POSTGRES_PASSWORD (compose refuses to start without it)
-docker compose up --build -d --wait
-open http://localhost:3000        # UI      (Windows: start http://localhost:3000)
-curl http://localhost:8000/healthz
-curl -X POST localhost:8000/api/ideas -H 'Content-Type: application/json' -d '{"content":"My new idea"}'
-curl localhost:8000/api/ideas
-
-# The smoke-test suite also works against compose:
-BASE_URL=http://localhost:3000 APP_HOST=localhost bash scripts/smoke-test.sh compose
-docker compose down               # add -v to drop the database volume
-```
-
-All three services have healthchecks, and `--wait` blocks until they're healthy. The backend
-container runs read-only as uid 10001 with `no-new-privileges`.
-
-**Developing without containers:**
-
-```bash
-# Frontend with live reload against the containerised backend (works on every OS):
-docker compose up -d --wait postgres backend
-cd frontend && npm ci && npm run dev               # http://localhost:5173 - Vite proxies /api to :8000
-
-# Backend outside Docker too (Linux/macOS/Windows x64; psycopg has no Windows-ARM64 wheel):
-python -m venv .venv && . .venv/bin/activate      # Windows Git Bash: . .venv/Scripts/activate
-pip install -r backend/requirements-dev.txt -r ai/requirements-dev.txt
-docker compose up -d --wait postgres && docker compose stop backend frontend
-cd backend && DB_HOST=localhost DB_PASSWORD=<POSTGRES_PASSWORD from .env> DB_SSLMODE=disable \
-  uvicorn app.main:create_app --factory --reload
-```
+**Why kind?** It runs Kubernetes as Docker containers: no VM, about 30-second start-up, direct `localhost` port
+mapping, and NetworkPolicy enforcement since v0.24. It's the Kubernetes project's own conformance tool. k3d bundles
+Traefik and k3s; minikube needs a VM driver and more resources.
 
 ---
 
-## 5. Run on local Kubernetes (kind + Terraform + pipeline)
+## 6. Running the solution locally
+
+### 6.1 Docker Compose (development)
 
 ```bash
-# 0. Tools (skip what you already have) and Python deps for the AI tooling
-bash scripts/install-tools.sh
-python -m venv .venv && .venv/bin/pip install -r backend/requirements-dev.txt -r ai/requirements-dev.txt
-
-# 1. (Optional) local LLM - without it every AI step uses its deterministic fallback
-ollama pull llama3.2:3b && ollama serve          # or: export AI_ENABLED=false
-
-# 2. Platform: kind cluster + terraform apply of the "local" stack
-bash scripts/pipeline.sh platform
-#    = scripts/kind-up.sh                         kind cluster "idea-board", ingress on 127.0.0.1:8080
-#    + scripts/tf.sh local apply                  ingress-nginx, metrics-server, namespaces staging/production
-#                                                 (PSA restricted, ResourceQuota, LimitRange), PostgreSQL per
-#                                                 namespace, Secret idea-board-db
-
-# 3. The pipeline: lint/test → build → deploy staging → verify → promote production
-bash scripts/pipeline.sh
+cp .env.example .env                    # set POSTGRES_PASSWORD; compose refuses to start without it
+docker compose up -d --build --wait     # postgres, backend, frontend - all with healthchecks
 ```
 
-When it finishes:
+| URL | Purpose |
+|---|---|
+| http://localhost:3000 | Idea Board UI |
+| http://localhost:3000/pipelines | Pipelines dashboard |
+| http://localhost:8000/docs | API explorer (FastAPI) |
+
+```bash
+BASE_URL=http://localhost:3000 APP_HOST=localhost bash scripts/smoke-test.sh compose   # 7 checks
+docker compose down          # add -v to delete the database volume
+```
+
+**Frontend development with live reload** (VS Code): keep compose running, then `cd frontend && npm run dev` and open
+http://localhost:5173. Vite proxies `/api` to the backend on port 8000. On Windows ARM64 the backend must run in
+Docker, because psycopg ships no Windows-ARM64 wheel (I-10).
+
+### 6.2 Local Kubernetes (kind + Terraform + pipeline)
+
+```bash
+bash scripts/install-tools.sh                                  # optional: kind/helm/terraform into .tools/bin
+python -m venv .venv && .venv/Scripts/pip install -r backend/requirements-dev.txt -r ai/requirements-dev.txt
+ollama pull llama3.2:3b                                        # optional
+
+bash scripts/pipeline.sh platform     # kind cluster + terraform apply (ingress, metrics-server, namespaces, DBs, secrets)
+bash scripts/pipeline.sh              # lint-test → build → deploy-staging → verify-staging → approval → promote-production
+```
+
+The production stage waits for approval. Approve in http://localhost:3000/pipelines, with
+`python scripts/runstate.py --run-dir artifacts/runs/<runId> decide approve`, or skip the gate with
+`PIPELINE_APPROVAL=auto`.
 
 | Environment | URL | Namespace |
 |---|---|---|
-| **staging** | http://staging.ideaboard.localhost:8080/ | `staging` |
-| **production** | http://ideaboard.localhost:8080/ | `production` |
+| staging | http://staging.ideaboard.localhost:8080 | `staging` |
+| production | http://ideaboard.localhost:8080 | `production` |
 
-"Public" here means reachable through the ingress controller on `localhost`. `*.localhost`
-resolves to `127.0.0.1` in modern browsers and curl without any `/etc/hosts` edits. The smoke tests
-send a `Host` header, so they work even where that resolution isn't available.
+`*.localhost` resolves to 127.0.0.1 in modern browsers and curl. The smoke tests also send an explicit `Host` header.
 
-Useful extras:
+**Additional stages**
 
 ```bash
-bash scripts/pipeline.sh status                                   # is the LLM usable?
-bash scripts/pipeline.sh preview "deploy-preview/feature-x"       # AI-planned preview env
+bash scripts/pipeline.sh status                                    # is the LLM available?
+bash scripts/pipeline.sh preview "deploy-preview/feature-x"        # AI-planned preview environment
 bash scripts/pipeline.sh preview "/deploy-preview login with 2 backend replicas"
 bash scripts/pipeline.sh preview "/destroy-preview login"
-bash scripts/pipeline.sh demo-rollback                            # ship a broken image; watch the gate roll back
+bash scripts/pipeline.sh demo-rollback                             # broken image → detected → automatic rollback
 bash scripts/pipeline.sh generate-iac ai/examples/notifications.service.yaml
-ls artifacts/   # ai/ (audit), generated/, incidents/, health/, smoke-*.txt, manifests-*.yaml
+bash scripts/pipeline.sh simulate                                  # cluster-free demo run for the dashboard
 ```
 
-`APP_BASE_URL` overrides where the health gate and smoke tests reach the ingress (default
-`http://127.0.0.1:8080`). Use it for a cloud load balancer, or to test through
-`kubectl port-forward svc/idea-board-frontend 18081:8080 -n staging` if the ingress controller is unavailable.
+**If the ingress controller is unavailable** (for example, a network that can't reach `registry.k8s.io`; see I-15),
+point the health gate and smoke tests at a port-forward:
 
-Tear down: `kind delete cluster --name idea-board && rm -rf .state`.
+```bash
+kubectl -n staging    port-forward svc/idea-board-frontend 18081:8080 &
+kubectl -n production port-forward svc/idea-board-frontend 18082:8080 &
+APP_BASE_URL_STAGING=http://127.0.0.1:18081 APP_BASE_URL_PRODUCTION=http://127.0.0.1:18082 bash scripts/pipeline.sh
+```
+
+**Tear-down:** `kind delete cluster --name idea-board && rm -rf .state`
 
 ---
 
-## 5a. Pipelines page (run view in the browser)
+## 7. CI/CD pipeline
 
-The frontend has a second page, **`/pipelines`**, that shows pipeline runs in the style of the Azure
-DevOps run view. It has:
+### 7.1 Stages
 
-* a run list
-* a header with run number, branch, commit, trigger, status and duration
-* left-to-right stage cards with their jobs
-* a live log panel for each job
-* an **Approve / Reject** gate on `promote-production`
-* an AI panel showing every AI decision (kind, validation result, deterministic-fallback badge, output, prompt)
-* a rollback banner carrying the AI incident summary
+| # | Stage | Script | Purpose | Gate |
+|---|---|---|---|---|
+| 1 | lint-test | `stages/lint_test.sh` | ruff, pytest (backend + AI), eslint, Vitest, build, compose config, helm lint, terraform fmt/validate (all roots), shared-variables drift check | fails on any error |
+| 2 | build | `stages/build.sh` | images tagged with the commit SHA, then loaded into kind or pushed to `$REGISTRY` | |
+| 3 | deploy-staging | `stages/deploy.sh staging` | AI env-config → server-side-validated render → `helm upgrade` → AI health gate | auto-rollback, exit 2 |
+| 4 | verify-staging | `stages/verify.sh staging` | 7 smoke checks through the ingress | failure → health gate |
+| 5 | promote-production | approval → `deploy.sh production` → `verify.sh production` | same image tag as staging | **manual approval** |
+
+### 7.2 Azure Pipelines and the local runner
+
+`azure-pipelines.yml` contains orchestration only (agents, conditions, environments, artifacts). Every step is
+`bash scripts/pipeline.sh <stage>`, so the two can't drift.
+
+- **LintTest** runs on a Microsoft-hosted `ubuntu-latest` agent.
+- **Cluster-facing stages** need a **self-hosted agent** (pool `kind-local`) on the machine that can reach the cluster.
+- **Approval** for production is done by an Azure DevOps **Environment approval** on `idea-board-production`. The YAML
+  sets `PIPELINE_APPROVAL=auto` so the script-level gate doesn't wait a second time.
+- **Artifacts:** `artifacts/` (AI audit trail, generated values, health reports, incident reports, run state, logs) is
+  published on every run, including failures.
+
+To set up Azure DevOps:
+
+1. Create the pipeline from `azure-pipelines.yml`.
+2. Register a self-hosted agent with Docker, kind/kubectl/helm and Python.
+3. Run `scripts/pipeline.sh platform` once on that machine.
+4. Create the environments `idea-board-staging` and `idea-board-production`, and add an approval check to production.
+
+PR-comment previews are passed as the `previewRequest` runtime parameter. `deploy-preview/*` branches trigger
+previews automatically.
+
+---
+
+## 8. Pipelines dashboard (`/pipelines`)
+
+An Azure-DevOps-style run view served by the same frontend:
+
+- run list with status dots
+- header with run number, branch, commit, trigger, status and duration
+- left-to-right stage cards with their jobs
+- a log panel for each job (live while running, auto-scroll, copy button)
+- an **Approve / Reject** gate
+- an AI panel per run (kind, validation result, *deterministic fallback* badge, output, prompt)
+- a rollback banner with the AI incident summary
 
 The page polls every 3 seconds while a run is `running` or `waitingApproval`.
 
-```bash
-docker compose up -d --build --wait             # backend mounts ./artifacts/runs
-bash scripts/pipeline.sh simulate               # sample run, no cluster needed (Git Bash)
-# open http://localhost:3000/pipelines - watch it progress, then click Approve
-```
-
-* **Data:** every `scripts/pipeline.sh` run (except `status`) writes `artifacts/runs/<runId>/run.json`,
-  plus one log per job in `logs/<job>.log`, *while it runs*. The writer is `scripts/runstate.py`.
-  The backend serves this data read-only at `GET /api/pipelines`, `GET /api/pipelines/{runId}` and
-  `GET /api/pipelines/{runId}/logs/{job}`. IDs are pattern-checked and every path must resolve inside the
-  runs directory.
-* **Approvals:** `POST /api/pipelines/{runId}/approve` with `{"decision":"approve"|"reject"}` records the
-  decision in `run.json`, and the waiting runner picks it up. **It has no authentication.** It's a local
-  demo; put real auth in front of it before exposing it. The CLI alternative is
-  `python scripts/runstate.py --run-dir artifacts/runs/<runId> decide approve`. With
-  `PIPELINE_APPROVAL=auto` the gate is skipped; Azure Pipelines uses this, because its Environment
-  approvals do the gating.
-* **`simulate`** keeps the real stage/job graph, run state, logs and approval gate, and calls the real
-  AI env-config step, but it builds and deploys nothing (every log line says `SIMULATED`).
-  `SIMULATE_FAIL_JOB=build` produces a failed run. A real rollback run comes from
-  `scripts/pipeline.sh demo-rollback` on the kind cluster.
-* **UI development without a pipeline:** `cd frontend && npm run dev:fixtures` (http://localhost:5173/pipelines)
-  serves `src/fixtures/`: a succeeded run, a rolled-back run and a run waiting for approval.
-* **Tests:** `npm test` (Vitest: status → colour mapping, stage/job rendering from fixture run.json,
-  approval gate, AI panel, rollback banner) and `npm run test:e2e` (Playwright on the fixtures; with
-  `PW_CHANNEL=msedge` it uses the installed Edge, otherwise run `npx playwright install chromium` first).
-
----
-
-## 6. CI/CD: Azure Pipelines and the local runner
-
-`azure-pipelines.yml` defines the stages **LintTest → Build → DeployStaging → VerifyStaging →
-PromoteProduction**, plus **Preview** for `deploy-preview/*` branches or a manually supplied
-`/deploy-preview …` request. Each step is a single `bash scripts/pipeline.sh <stage>`, so the YAML holds
-orchestration (agents, conditions, approvals, artifacts) and no build logic. The local runner can't
-drift from CI because both execute the same scripts.
-
-| Stage | Agent | What runs |
-|---|---|---|
-| LintTest | Microsoft-hosted `ubuntu-latest` | `pipeline.sh lint-test` (AI disabled: tests use fakes) |
-| Build | self-hosted | `pipeline.sh build` → `idea-board-*:<commit-sha>` + `kind load` |
-| Preview | self-hosted | `pipeline.sh preview "<branch or comment>"` |
-| DeployStaging | self-hosted, environment `idea-board-staging` | `pipeline.sh deploy-staging` |
-| VerifyStaging | self-hosted | `pipeline.sh verify-staging` |
-| PromoteProduction | self-hosted, environment `idea-board-production` (add an approval) | `pipeline.sh promote-production` |
-
-Each deploy and verify stage publishes `artifacts/` (AI audit log, generated values, health reports,
-incident summaries, rendered manifests) as a pipeline artifact, even when the stage fails.
-
-**Why a self-hosted agent?** Microsoft-hosted agents run in Azure and can't reach
-`127.0.0.1` on your machine. To run the full pipeline from Azure DevOps:
-
-1. Push this repo to Azure Repos or GitHub and create a pipeline from `azure-pipelines.yml`.
-2. Create an agent pool named **`kind-local`** (or pass `selfHostedPool`). On the machine running kind,
-   install the [Azure Pipelines agent](https://learn.microsoft.com/azure/devops/pipelines/agents/linux-agent)
-   with Docker, kind, kubectl, helm, Python and (optionally) Ollama available to the agent user.
-3. Run `scripts/pipeline.sh platform` once on that machine.
-4. Create environments `idea-board-staging` and `idea-board-production`, and add an approval check to production.
-
-Without an agent, run `bash scripts/pipeline.sh` locally. It's the same pipeline.
-
-PR comments: Azure Repos has no native "comment → run" trigger, so the pipeline takes the comment
-text as the `previewRequest` runtime parameter (or a service hook / GitHub `/azp run` can forward it).
-Branches named `deploy-preview/<name>` trigger the preview automatically.
-
----
-
-## 7. AI Integration
-
-### What was built
-
-Four AI features, all running on a **local** Ollama model and all built on one code path
-(`ai/aiops/llm.py::decide`):
-
-```
-prompt ─► Ollama (format = JSON Schema, temperature 0) ─► JSON ─► schema validation ─► semantic policy ─► use it
-                │ unreachable / model missing / timeout          │ invalid                 │ violated
-                └──────────────────────────────► deterministic fallback ◄─────────────────┘
-every path ─► artifacts/ai/<timestamp>-<feature>.json + audit.jsonl
-              (prompt, model, raw output, validation result, source=llm|fallback, reason, decision)
-```
-
-| # | Feature | Trigger | The LLM proposes… | …and it is only accepted if | Fallback |
-|---|---|---|---|---|---|
-| 1 | **Dynamic environment configuration** (`envconfig.py`) | every deploy | replicas, CPU/memory, HPA, PDB, topology spread from `deploy/env-specs/<env>.txt` ("cost-sensitive staging" / "high-availability production") | it matches `ai/schemas/environment-profile.schema.json`, requests ≤ limits, PDB satisfiable, HPA bounds sane, worst-case requests fit the namespace quota budget, **and** it honours the deterministic reading of the goal (an HA goal can't get 1 replica) | safe default profile for the classified goal |
-| 2 | **Intelligent health checks and rollback** (`health.py`) | after every `helm upgrade` and on smoke-test failure | a verdict + on-call summary from pod phases, restarts, waiting reasons (CrashLoopBackOff, ImagePullBackOff, OOMKilled), warning events, error-log lines, a synthetic probe (error rate, p95), helm history | schema-valid and self-consistent | deterministic rules + templated summary |
-| 3 | **AI-assisted command generation** (`preview.py`, `commands.py`) | branch `deploy-preview/<name>`, `/deploy-preview <name> [request]`, `/destroy-preview <name>` | the deployment plan as **argv lists** (e.g. honouring "with 2 backend replicas") | every step passes the allowlist validator (below) and the plan actually installs/uninstalls the right release with the commit's image tag | known-good template plan |
-| 4 | **Generative IaC** (`geniac.py`) | `pipeline.sh generate-iac <spec>` | sizing and probe timings for a new service | schema + requests ≤ limits; the rendered files then pass **`helm lint`** and **`terraform validate`** before moving from `services/<name>.candidate` to `services/<name>` | tiered defaults by `expected_traffic` |
-
-### Design choices
-
-* **The LLM proposes data, never code.** It returns JSON constrained by a JSON Schema (Ollama
-  structured outputs) at temperature 0. YAML/HCL are rendered by trusted templates, and commands are
-  argv arrays run with `subprocess` **without a shell**.
-* **The command validator is the security boundary** (`ai/aiops/commands.py`), not the prompt.
-  Only `kubectl`/`helm` run. kubectl is limited to `get/describe/logs/rollout status` on an
-  allowlist of resource kinds, and `delete namespace` only for the expected `preview-*` namespace
-  under the destroy policy. helm is limited to `upgrade --install`, `status`, `history`, plus
-  `rollback`/`uninstall` only under the matching policy. Every command must target exactly the
-  namespace that *trusted code* derived from the trigger, and that namespace must match the policy's
-  allowlist (`preview-*` for previews, so production is unreachable). Charts, values files and `--set`
-  keys are allowlisted, `--set` values must match a strict regex, and comma-smuggling is rejected. No
-  argument may contain shell metacharacters or whitespace. Flags like `--kubeconfig`, `--context`,
-  `--token`, `-A`, `--post-renderer`, `--repo` and `--set-file` are forbidden, and the kube context is
-  injected by the executor. Secrets can't be read. The executor **re-validates** right before it runs
-  anything. `ai/tests/test_commands.py` covers about 30 attack shapes.
-* **Rules are authoritative and the LLM adds judgement.** Hard failures always roll back, and the
-  LLM can't talk the gate out of it. The LLM may *escalate* to a rollback only with confidence ≥ 0.8
-  **and** at least one corroborating warning signal. Otherwise its concern is recorded as advisory.
-  Its main job is the on-call summary and suspected cause, where an LLM adds the most.
-* **No `helm --atomic`.** Helm would silently undo a bad release. Instead the health gate decides,
-  rolls back to the last good revision, writes `artifacts/incidents/<time>-<ns>-<release>.md`, and
-  fails the stage with a distinct exit code (2 = rolled back, 3 = couldn't roll back).
-* **Small model by default** (`llama3.2:3b`; `qwen2.5-coder:3b` also works well). Set it with `OLLAMA_MODEL`.
-  The tasks are narrow and schema-constrained, so a 3B model is enough and runs on a laptop CPU.
-
-### Fallback behaviour (the pipeline never breaks because of AI)
-
-| Situation | Behaviour |
+| Element | Detail |
 |---|---|
-| `AI_ENABLED=false` | every feature prints `[AI FALLBACK] deterministic logic used - AI disabled` |
-| Ollama not running / model not pulled / timeout | `[AI FALLBACK] … LLM unavailable: Ollama not reachable …` / `… run: ollama pull <model>` |
-| LLM returns non-JSON, schema-invalid or policy-violating output | `[AI FALLBACK] … LLM output rejected by validation: <errors>`. The errors go to the audit file |
-| LLM output accepted | `[AI] decision produced by local LLM '<model>' and passed validation.` |
-
-The banner is printed in the job log and also embedded in generated files (header of
-`values-<env>.ai.yaml`, incident reports). `scripts/pipeline.sh status` shows which mode you're in.
-
-### Value to the DevOps lifecycle
-
-* **Configuration:** engineers state *intent* ("survive a node drain without downtime"), not
-  numbers. Proposals are bounded by policy and quota, so the AI can't produce a config that breaks
-  scheduling or blocks node drains (unsatisfiable PDBs are rejected).
-* **Release safety:** a bad release (crash loop, bad image, 5xx, OOM) is detected and rolled back
-  automatically within minutes, with a readable incident write-up attached to the run. That cuts
-  time-to-mitigate and spares on-call from digging through `kubectl describe` output.
-* **Developer self-service:** preview environments from a branch name or a PR comment in natural
-  language, with no access to cluster credentials and no way to reach staging/production.
-* **Scaffolding:** a new service gets a hardened chart, quota-sized namespace and a Terraform stub that
-  already pass lint/validate.
-* **Auditability:** every AI decision can be replayed from `artifacts/ai/`: what was asked, which model
-  answered, what it said, whether it was accepted, and why.
-
-### Known limits
-
-LLM output quality varies with the model, which is why acceptance is decided by validators rather
-than by trusting the model. The "metrics" are a synthetic probe plus Kubernetes signals. A Prometheus
-query step would fit into `health.collect()` unchanged.
+| Run state | `artifacts/runs/<runId>/run.json` + `logs/<job>.log`, written **during** the run by `scripts/runstate.py`. Statuses: `pending, running, succeeded, failed, skipped, rolledBack, waitingApproval` |
+| API (read-only) | `GET /api/pipelines`, `GET /api/pipelines/{runId}`, `GET /api/pipelines/{runId}/logs/{job}`. Strict ID patterns plus resolved-path containment (path traversal rejected) |
+| Approval | `POST /api/pipelines/{runId}/approve` `{"decision":"approve"\|"reject"}`. **No authentication; local demo only** (see L-05) |
+| Demo data | `bash scripts/pipeline.sh simulate` (real state machine, simulated work) or `cd frontend && npm run dev:fixtures` (static fixtures) |
+| Tests | `npm test` (Vitest), `npm run test:e2e` (Playwright; `PW_CHANNEL=msedge` uses the installed Edge) |
 
 ---
 
-## 8. Cloud-Agnostic Approach
+## 9. AI integration
 
-### Contracts, not clouds
+### 9.1 Design principles
 
-Each provider-specific concern sits behind a small **output contract**:
+1. **The LLM proposes data, never code.** Output is JSON constrained by a JSON Schema (Ollama structured outputs,
+   temperature 0). YAML and HCL are rendered by trusted templates. Commands are argv arrays run **without a shell**.
+2. **Validation decides, not the model.** Every output passes the schema plus a semantic policy before use.
+3. **Deterministic fallback.** If the LLM is unavailable, times out, or returns invalid output, the feature falls back
+   and says so (`[AI FALLBACK] …`). The pipeline never fails because of AI.
+4. **Full audit trail.** Prompt, model, raw output, validation result, source (`llm` or `fallback`) and the decision
+   are written to `artifacts/ai/`, and attached to the run in the dashboard.
+
+### 9.2 Features
+
+| Feature | Trigger | The LLM proposes | Accepted only if | Fallback |
+|---|---|---|---|---|
+| Dynamic environment configuration (`envconfig.py`) | every deploy | replicas, CPU/memory, HPA, PDB, topology spread from `deploy/env-specs/<env>.txt` | schema-valid; requests ≤ limits; PDB satisfiable; within the namespace quota budget; **consistent with the deterministic reading of the goal** (an HA goal can't get one replica) | safe profile for the classified goal |
+| Health checks and automatic rollback (`health.py`) | after each `helm upgrade`; on smoke-test failure | verdict, confidence, on-call summary, suspected cause, from pods, restarts, waiting reasons, warning events, error logs, a synthetic probe and helm history | schema-valid and self-consistent | deterministic rules + templated summary |
+| Command generation (`preview.py`, `commands.py`) | `deploy-preview/<name>` branch, `/deploy-preview <name> [request]`, `/destroy-preview <name>` | deployment plan as argv lists | every command passes the allowlist validator; the plan installs the right release with the commit's image tag | known-good template plan |
+| Generative IaC (`geniac.py`) | `pipeline.sh generate-iac <spec>` | sizing and probe timings for a new service | schema + requests ≤ limits, **then** `helm lint` and `terraform validate` pass | tiered defaults |
+
+### 9.3 Safety controls
+
+- **Command allowlist** (the security boundary):
+  - binaries: `kubectl` and `helm` only
+  - kubectl: `get`, `describe`, `logs` and `rollout status` on allowlisted kinds; `delete namespace` only for the
+    expected `preview-*` namespace under the destroy policy
+  - helm: `upgrade --install`, `status`, `history`; `rollback` and `uninstall` only under the matching policy
+  - namespaces: must equal the trusted, derived namespace, and match the policy allowlist (production is unreachable
+    from preview plans)
+  - charts, values files and `--set` keys are allowlisted; `--set` values match a strict regex
+  - rejected outright: shell metacharacters; the flags `--kubeconfig`, `--context`, `--token`, `-A`, `--post-renderer`,
+    `--repo`, `--set-file`; any reference to secrets
+  - the executor re-validates immediately before running anything
+- **Rollback authority:** hard failures always roll back, and the LLM can't veto that. The LLM may escalate to a
+  rollback only with confidence ≥ 0.8 **and** a corroborating warning signal.
+- **No `helm --atomic`:** the gate rolls back explicitly, to the last revision that actually succeeded, writes an
+  incident report, and exits with code 2 (rolled back) or 3 (couldn't roll back).
+
+### 9.4 Fallback behaviour
+
+| Situation | Output |
+|---|---|
+| `AI_ENABLED=false` | `[AI FALLBACK] deterministic logic used - AI disabled` |
+| Ollama not running / model not pulled / timeout | `[AI FALLBACK] … LLM unavailable: …` (including `ollama pull <model>` advice) |
+| Invalid LLM output | `[AI FALLBACK] … LLM output rejected by validation: <errors>`, shown in red in the dashboard |
+| Accepted | `[AI] decision produced by local LLM '<model>' and passed validation.` |
+
+### 9.5 Business value
+
+- **Intent-based configuration** ("survive a node drain") that can't break scheduling.
+- **Rollback within minutes**, with a human-readable incident report.
+- **Safe developer self-service** for preview environments.
+- **Pre-validated scaffolding** for new services.
+- **Every AI decision auditable.**
+
+---
+
+## 10. Cloud-agnostic design
 
 ```mermaid
 flowchart TB
-  subgraph roots["providers/<cloud> (composition roots - the provider abstraction)"]
+  subgraph roots["providers/<cloud> - composition roots"]
     L[local] & A[aws] & G[gcp]
   end
-  subgraph cluster["modules/cluster/* → { name, platform{cloud, storage_class, base_domain, ingress_values} }"]
+  subgraph cluster["modules/cluster/* → name, host, CA, platform{cloud, storage_class, ingress_values}"]
     kind & eks & gke
   end
   subgraph db["modules/database/* → connection{host, port, database, username, password, sslmode}"]
     inc[in-cluster] & rds & cloudsql
   end
   subgraph agnostic["cloud-agnostic (kubernetes + helm providers only)"]
-    ingress[modules/ingress] & app[modules/app<br/>namespace · PSA · quota · limits] & sec[modules/app/database-secret]
+    ingress[modules/ingress] & app[modules/app] & sec[modules/app/database-secret]
   end
   L --> kind & inc
   A --> eks & rds
@@ -446,140 +382,347 @@ flowchart TB
   roots --> agnostic
 ```
 
-* `modules/ingress`, `modules/app` and `modules/app/database-secret` never see a cloud API. They
-  take `platform` / `connection` objects. The **app chart is identical everywhere**: it reads
-  `Secret idea-board-db`, so in-cluster PostgreSQL, RDS, Cloud SQL or any external database differ
-  only in that Secret's values. Only the database egress rule changes (`database.podSelector` vs
-  `database.cidrs`).
-* The three roots share a byte-identical `variables-common.tf`, and `lint-test` fails if they drift.
-  So every cloud accepts the same environment definition.
-* **Selecting a cloud is one variable.** `environments/<stack>/terraform.tfvars` has
-  `cloud = "local" | "aws" | "gcp"`. `scripts/tf.sh <stack> <cmd>` reads it and runs
-  `providers/<cloud>` with `terraform.tfvars` + `<cloud>.tfvars` (region, VPC, instance types).
-  Each root also asserts its own `cloud` value, so a mismatch fails fast.
-* Database placement is per environment: `database = { mode = "in_cluster" | "managed" | "external" }`.
+- **Contracts.** Cluster and database implementations expose identical outputs. The ingress, namespace and secret
+  modules, the Helm chart, the pipeline and the AI tooling contain **no cloud-specific code**.
+- **One selector.** In `environments/<stack>/terraform.tfvars`, `cloud = "local" | "aws" | "gcp"` selects
+  `providers/<cloud>`. Provider details live in `<cloud>.tfvars`, and each root rejects a mismatched `cloud` value.
+- **Shared inputs.** `variables-common.tf` is byte-identical in every root. The pipeline fails if the copies drift.
+- **Database placement per environment.** `database.mode = in_cluster | managed | external`. The application only
+  ever sees the `idea-board-db` Secret.
+- **Pipeline portability.** Every environment-specific value is a variable: `KUBE_CONTEXT_<ENV>`,
+  `APP_BASE_URL_<ENV>`, `APP_DOMAIN`, `REGISTRY`, `BUILD_PLATFORM` (section 17).
 
-### Deploying to AWS or GCP (documented, not applied)
+**Adding a third provider (for example Azure):**
+
+1. Add `modules/cluster/aks` and `modules/database/flexible-server` with the same outputs.
+2. Add `providers/azure/` with a copy of `variables-common.tf` and an `azurerm` provider block.
+3. Add `environments/<stack>/azure.tfvars` and set `cloud = "azure"`.
+
+Nothing else changes.
+
+---
+
+## 11. Cloud deployment runbook: AWS and GCP
+
+> **Status:** these procedures are **documented and statically validated** (`terraform validate` against the real
+> provider schemas), but **were not executed**, because no paid resources were provisioned. Expect to adjust IDs,
+> quotas and organisation policies. Estimated cost per stack: roughly USD 150–300/month for staging-sized resources.
+> Run `terraform plan` and review it before any `apply`.
+
+### 11.1 Common steps (both clouds)
+
+1. **Pick the stack.** `infra/terraform/environments/staging` (cost-sensitive: Spot/zonal, single-AZ DB) or
+   `.../production` (HA: on-demand, regional, Multi-AZ/regional DB, deletion protection).
+2. **Configure the remote state backend** in `environments/<stack>/backend.hcl` (git-ignored by convention).
+3. **Fill `environments/<stack>/<cloud>.tfvars`.** Replace every placeholder ID.
+4. **Provision in two phases.** The Kubernetes and Helm providers need the cluster to exist first:
+   ```bash
+   scripts/tf.sh <stack> plan
+   scripts/tf.sh <stack> apply -target=module.cluster
+   scripts/tf.sh <stack> apply
+   ```
+5. **Build multi-architecture images.** Development machines may be ARM64 while cloud nodes are AMD64 (I-23):
+   ```bash
+   export REGISTRY=<registry>  BUILD_PLATFORM=linux/amd64
+   bash scripts/pipeline.sh build        # docker buildx build --platform $BUILD_PLATFORM --push
+   ```
+6. **Configure the pipeline** for the cloud clusters (section 17), then run the stages:
+   ```bash
+   export APP_DOMAIN=ideaboard.example.com
+   export KUBE_CONTEXT_STAGING=<staging context>  KUBE_CONTEXT_PRODUCTION=<production context>
+   export APP_BASE_URL_STAGING=http://<staging LB address>  APP_BASE_URL_PRODUCTION=http://<production LB address>
+   bash scripts/pipeline.sh deploy-staging && bash scripts/pipeline.sh verify-staging && bash scripts/pipeline.sh promote-production
+   ```
+7. **DNS and TLS.** Create DNS records for `staging.<domain>` and `<domain>` pointing at each ingress load balancer
+   (`kubectl -n ingress-nginx get svc ingress-nginx-controller`). TLS isn't automated: install cert-manager, or
+   terminate TLS at the load balancer, then set `ingress.tls.enabled=true` and `ingress.tls.secretName`.
+8. **Database egress.** With a managed database, the backend's NetworkPolicy must allow the database CIDR. Add this to
+   `deploy/helm/idea-board/values-<env>.yaml`:
+   ```yaml
+   database:
+     podSelector: {}
+     cidrs: ["10.0.0.0/16"]   # VPC / private-service range of the managed database
+   ```
+
+### 11.2 AWS (EKS + RDS)
+
+**Prerequisites**
+- AWS CLI v2, authenticated (`aws sts get-caller-identity`).
+- Permissions for EKS, EC2, IAM, RDS, KMS, S3, DynamoDB and ECR.
+- An existing VPC with private subnets in at least 2 AZs and a NAT gateway (nodes pull public images).
+
+**One-time setup**
 
 ```bash
-# AWS: fill environments/staging/aws.tfvars (VPC, subnets, KMS key), then
-cat > infra/terraform/environments/staging/backend.hcl <<'EOF'
-bucket = "my-tf-state"  key = "idea-board/staging.tfstate"  region = "eu-west-1"
-EOF
-scripts/tf.sh staging plan
-scripts/tf.sh staging apply -target=module.cluster   # first time only (k8s provider needs the cluster)
-scripts/tf.sh staging apply
+REGION=eu-west-1; ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 
-# GCP: set cloud = "gcp" in environments/staging/terraform.tfvars, fill gcp.tfvars,
-#      backend.hcl = bucket/prefix, then the same commands.
+# Terraform state: versioned, encrypted bucket + lock table
+aws s3api create-bucket --bucket idea-board-tfstate-$ACCOUNT --region $REGION \
+  --create-bucket-configuration LocationConstraint=$REGION
+aws s3api put-bucket-versioning --bucket idea-board-tfstate-$ACCOUNT --versioning-configuration Status=Enabled
+aws s3api put-bucket-encryption --bucket idea-board-tfstate-$ACCOUNT \
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"aws:kms"}}]}'
+aws dynamodb create-table --table-name idea-board-tflock --billing-mode PAY_PER_REQUEST \
+  --attribute-definitions AttributeName=LockID,AttributeType=S --key-schema AttributeName=LockID,KeyType=HASH
+
+# KMS key for Kubernetes Secrets envelope encryption
+aws kms create-key --description "idea-board EKS secrets" --query KeyMetadata.Arn --output text
+
+# Container registry (immutable tags, scan on push)
+for repo in idea-board-backend idea-board-frontend; do
+  aws ecr create-repository --repository-name $repo --image-tag-mutability IMMUTABLE \
+    --image-scanning-configuration scanOnPush=true
+done
 ```
 
-For the app pipeline on a cloud cluster, set `KUBE_CONTEXT` and `REGISTRY` (build pushes
-`$REGISTRY/idea-board-*:<sha>`). Then set `backend.image.repository` / `frontend.image.repository`
-in the env values, point DNS at the ingress load balancer, and enable `ingress.tls`.
+`infra/terraform/environments/staging/backend.hcl`:
 
-### Adding a third provider (e.g. Azure AKS)
+```hcl
+bucket         = "idea-board-tfstate-<ACCOUNT>"
+key            = "idea-board/staging.tfstate"
+region         = "eu-west-1"
+dynamodb_table = "idea-board-tflock"
+encrypt        = true
+```
 
-1. `modules/cluster/aks`: create the cluster and output `name`, `host`, `cluster_ca_certificate`, and
-   `platform` (`storage_class = "managed-csi"`, ingress values with the Azure LB annotations).
-2. `modules/database/flexible-server`: Azure Database for PostgreSQL that outputs the same `connection`.
-3. `providers/azure/`: copy `variables-common.tf` verbatim, add `azurerm` to `versions.tf`/`providers.tf`,
-   wire the two modules plus the unchanged `ingress`, `app` and `database-secret` modules (about 80
-   lines, mostly copied from `providers/aws/main.tf`).
-4. `environments/<stack>/azure.tfvars` and `cloud = "azure"`.
+**Configure.** In `environments/staging/terraform.tfvars`, keep `cloud = "aws"`. Then fill `aws.tfvars` with
+`region`, `vpc_id`, `private_subnet_ids`, `cluster_cidrs`, `secrets_kms_key_arn` (from above), node sizing and
+`database_instance_class`.
 
-You don't touch the chart, the pipeline, the AI tooling, or the cloud-agnostic modules.
+**Provision and connect**
 
-### What is and isn't tested
+```bash
+scripts/tf.sh staging plan
+scripts/tf.sh staging apply -target=module.cluster
+scripts/tf.sh staging apply
+aws eks update-kubeconfig --name idea-board-staging --region $REGION --alias eks-staging
+kubectl --context eks-staging get nodes
+```
 
-| | Status |
-|---|---|
-| `providers/local` | `terraform validate` ✔. **Applied** to kind (see §10) |
-| `providers/aws`, `providers/gcp` (EKS/RDS, GKE/Cloud SQL modules) | `terraform validate` ✔ with real provider schemas. **Never planned or applied**: no credentials, no paid resources. The placeholder IDs in `*.tfvars` must be replaced, and IAM/networking prerequisites (VPC, KMS key, Private Service Access) are assumed from your landing zone |
-| LoadBalancer/TLS/DNS for cloud ingress | designed (values/annotations), not exercised |
+This creates:
+- EKS cluster (KMS-encrypted secrets, control-plane audit logs, creator granted cluster-admin)
+- managed node group
+- VPC CNI with NetworkPolicy enforcement
+- ingress-nginx behind an AWS NLB
+- RDS PostgreSQL 16 (encrypted, private, Performance Insights, Multi-AZ in production)
+- namespaces with quotas, and the DB secret
+
+**Pipeline variables**
+
+```bash
+aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$REGION.amazonaws.com
+export REGISTRY=$ACCOUNT.dkr.ecr.$REGION.amazonaws.com  BUILD_PLATFORM=linux/amd64
+export KUBE_CONTEXT_STAGING=eks-staging  APP_DOMAIN=ideaboard.example.com
+export APP_BASE_URL_STAGING=http://$(kubectl --context eks-staging -n ingress-nginx get svc ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+```
+
+**Notes**
+- Using `database.mode = "in_cluster"` on EKS additionally requires the `aws-ebs-csi-driver` add-on (with an IRSA
+  role) for PersistentVolumes.
+- The NLB is provisioned by the in-tree controller. To use IP targets, install the AWS Load Balancer Controller.
+
+**Tear-down:** `scripts/tf.sh staging destroy`. Production has deletion protection on RDS: disable it first, and
+expect a final snapshot.
+
+### 11.3 GCP (GKE + Cloud SQL)
+
+**Prerequisites**
+- gcloud CLI, authenticated (`gcloud auth login && gcloud auth application-default login`), with
+  `gke-gcloud-auth-plugin`.
+- A project with billing.
+
+**One-time setup**
+
+```bash
+PROJECT=my-gcp-project; REGION=europe-west1; NETWORK=default
+gcloud config set project $PROJECT
+gcloud services enable container.googleapis.com sqladmin.googleapis.com servicenetworking.googleapis.com \
+  compute.googleapis.com artifactregistry.googleapis.com
+
+# Terraform state
+gcloud storage buckets create gs://idea-board-tfstate-$PROJECT --location=$REGION --uniform-bucket-level-access
+gcloud storage buckets update gs://idea-board-tfstate-$PROJECT --versioning
+
+# Private Service Access (Cloud SQL private IP)
+gcloud compute addresses create google-managed-services-$NETWORK --global --purpose=VPC_PEERING \
+  --prefix-length=16 --network=$NETWORK
+gcloud services vpc-peerings connect --service=servicenetworking.googleapis.com \
+  --ranges=google-managed-services-$NETWORK --network=$NETWORK
+
+# Cloud NAT: GKE nodes are private and need egress to pull public images
+gcloud compute routers create idea-board-router --network=$NETWORK --region=$REGION
+gcloud compute routers nats create idea-board-nat --router=idea-board-router --region=$REGION \
+  --auto-allocate-nat-external-ips --nat-all-subnet-ip-ranges
+
+# Container registry
+gcloud artifacts repositories create idea-board --repository-format=docker --location=$REGION
+gcloud auth configure-docker $REGION-docker.pkg.dev
+```
+
+`infra/terraform/environments/staging/backend.hcl`:
+
+```hcl
+bucket = "idea-board-tfstate-<PROJECT>"
+prefix = "idea-board/staging"
+```
+
+**Configure.** In `environments/staging/terraform.tfvars`, set **`cloud = "gcp"`**. Then fill `gcp.tfvars` with
+`project_id`, `region`, `cluster_location` (a zone for staging, a region for production), `network`, `subnetwork`,
+`network_id`, `machine_type`, `spot` and `database_tier`.
+
+**Provision and connect**
+
+```bash
+scripts/tf.sh staging plan
+scripts/tf.sh staging apply -target=module.cluster
+scripts/tf.sh staging apply
+gcloud container clusters get-credentials idea-board-staging --location europe-west1-b
+kubectl config rename-context gke_${PROJECT}_europe-west1-b_idea-board-staging gke-staging
+```
+
+This creates:
+- GKE (release channel, Dataplane V2 for NetworkPolicy, Workload Identity, private nodes, Shielded nodes)
+- an autoscaling node pool
+- ingress-nginx behind a regional L4 load balancer
+- Cloud SQL PostgreSQL 16 (private IP, TLS required, backups; regional HA and PITR in production)
+- namespaces with quotas, and the DB secret
+
+**Pipeline variables**
+
+```bash
+export REGISTRY=$REGION-docker.pkg.dev/$PROJECT/idea-board  BUILD_PLATFORM=linux/amd64
+export KUBE_CONTEXT_STAGING=gke-staging  APP_DOMAIN=ideaboard.example.com
+export APP_BASE_URL_STAGING=http://$(kubectl --context gke-staging -n ingress-nginx get svc ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+```
+
+**Tear-down:** `scripts/tf.sh staging destroy`. Production has `deletion_protection` on the cluster and the database:
+set it to false and apply before destroying.
+
+### 11.4 Switching an environment between clouds
+
+Change `cloud` in `environments/<stack>/terraform.tfvars` and provide the matching `<cloud>.tfvars` and
+`backend.hcl`. The environment definition (namespaces, quotas, database mode and HA) is reused unchanged. Data
+migration between clouds (for example `pg_dump` / `pg_restore`) is out of scope.
 
 ---
 
-## 9. Security and operational practices
+## 12. Security and compliance controls
 
-* **Containers:** multi-stage builds, pinned base images (`python:3.12.8-slim-bookworm`,
-  `node:22.12.0-alpine3.21`, `nginxinc/nginx-unprivileged:1.27.3-alpine3.20`, `postgres:16.6-alpine3.21`),
-  non-root users, `.dockerignore`, no build tools in runtime images. Digest-pinning via Renovate is
-  the natural next step.
-* **Kubernetes:** Pod Security Admission `restricted` on app namespaces, `runAsNonRoot`, seccomp
-  `RuntimeDefault`, all capabilities dropped, read-only root filesystems, no service-account token
-  mounting, resource requests/limits everywhere, ResourceQuota + LimitRange per namespace,
-  `services.loadbalancers=0`, NetworkPolicies, startup/readiness/liveness probes, rolling updates
-  with `maxUnavailable: 0`, PDBs and topology spread for production.
-* **Secrets:** no secrets in git. Compose reads `.env` (git-ignored, required). Kubernetes DB
-  credentials are generated by Terraform (`random_password`) into a Secret. Terraform state holds
-  them, so `.state/` is git-ignored. Use an encrypted remote backend in the cloud. External DB
-  passwords come only from `TF_VAR_external_database_passwords`.
-* **Supply chain:** `install-tools.sh` verifies SHA-256 checksums. Terraform provider versions are
-  pinned (`.terraform.lock.hcl` for the local root).
-* **ingress-nginx** is in end-of-life maintenance upstream. It's isolated in `modules/ingress`, and
-  apps only depend on the IngressClass, so moving to a Gateway API implementation means changing one module.
+| Area | Control |
+|---|---|
+| Images | Multi-stage builds; pinned base images; non-root (uid 10001 / 101); read-only root filesystem; no build tools at runtime; immutable SHA tags |
+| Kubernetes | PSA `restricted`; seccomp `RuntimeDefault`; all capabilities dropped; no service-account token mounting; requests and limits everywhere; ResourceQuota + LimitRange; `services.loadbalancers=0`; NetworkPolicies; probes; `maxUnavailable: 0`; PDB + topology spread in production |
+| Secrets | None in git. `.env` is required and git-ignored. DB passwords are generated by Terraform into Kubernetes Secrets. State is local and git-ignored, or remote and encrypted in the cloud. External DB passwords come only via `TF_VAR_external_database_passwords`. EKS secrets are KMS-encrypted |
+| Cloud data | RDS / Cloud SQL private only, encrypted, TLS required, automated backups, deletion protection in production |
+| AI | Schema-constrained output, allowlist command validator, no shell execution, rule-authoritative rollback, full audit trail |
+| Web | CSP, X-Frame-Options, nosniff and Referrer-Policy headers; request body limits; strict input validation |
+| API | Pipelines API is read-only apart from approvals; path-traversal protection. **Approval endpoint is unauthenticated (local only, L-05)** |
+| Supply chain | SHA-256-verified tool downloads; pinned Terraform providers and Helm charts; lock files committed |
 
 ---
 
-## 10. What was verified
+## 13. Verification summary
 
-Run on Windows 11 ARM64 (Git Bash), Docker Desktop 29.9, kind v0.26.0 (Kubernetes v1.32), helm v3.16.4,
-terraform 1.9.8, Python 3.12, Node 26. **No Ollama was installed, so every AI feature ran in deterministic-fallback
-mode.** The LLM path is covered by unit tests with a fake Ollama client: valid, malicious, malformed, contradictory
-and over-budget outputs.
+Full outputs are in **[`docs/TEST-RESULTS.md`](docs/TEST-RESULTS.md)**.
 
-| Check | Result |
+| Area | Result |
 |---|---|
-| `ruff check` + `ruff format --check` (backend, ai) | ✔ clean |
-| Backend pytest (API, validation, config) | ✔ 14 passed |
-| AI pytest (allowlist validator, preview plans, env-config policy, health rules/rollback, Ollama client, geniac) | ✔ 87 passed |
-| Frontend `eslint --max-warnings 0`, `tsc`, `vite build` | ✔ |
-| `docker compose config`; `docker compose up --build --wait` | ✔ all 3 services healthy |
-| Smoke tests against compose (`BASE_URL=http://localhost:3000`) | ✔ 7/7 |
-| `helm lint --strict` (default, staging, production, preview values; service chart) | ✔ |
-| `terraform fmt -check`; `terraform validate` for **local, aws, gcp** roots | ✔ |
-| `scripts/pipeline.sh lint-test` (all of the above in one stage) | ✔ |
-| `scripts/pipeline.sh generate-iac ai/examples/notifications.service.yaml` (gated by helm lint + terraform validate) | ✔ accepted into `services/notifications` |
-| kind cluster + `terraform apply` (stack `local`): namespaces (PSA restricted), quotas, limit ranges, PostgreSQL StatefulSets, DB secrets, metrics-server | ✔ (after the PSA fix below) |
-| `pipeline.sh build` → SHA-tagged images loaded into kind | ✔ |
-| `pipeline.sh deploy-staging` → AI env-config (cost-sensitive) → server-side-validated render → helm → health gate | ✔ healthy |
-| `pipeline.sh verify-staging` | ✔ 7/7 |
-| `pipeline.sh promote-production` → HA profile (2+2 replicas, HPA, PDB, spread) → health gate → smoke | ✔ 7/7 |
-| `pipeline.sh demo-rollback` (broken backend image) | ✔ detected (2 critical findings), **auto-rolled back** rev 3 → rev 2, incident report written, stage failed with exit code 2 |
-| `pipeline.sh preview "deploy-preview/feature-x"` → smoke → `"/destroy-preview feature-x"` | ✔ deployed (embedded DB), 7/7, then uninstalled and namespace deleted |
-
-**Caveat: the ingress hop.** The network this was built on couldn't download the ingress-nginx
-*controller* image from `registry.k8s.io`: its CDN was unreachable, and the webhook image took 29 minutes. The
-Kubernetes runs above therefore reached the app through `kubectl port-forward` to the frontend Service
-(`APP_BASE_URL=http://127.0.0.1:1808x`), whose nginx proxies `/api` and `/healthz` to the backend. Everything
-behind the ingress controller was exercised for real: Ingress objects, services, NetworkPolicies between
-frontend/backend/database, PSA, quotas, probes. The ingress-nginx Helm release itself is defined, validated
-and applied by Terraform, but it didn't become ready because of the image pull. On a normal connection,
-`scripts/pipeline.sh platform && scripts/pipeline.sh` uses `http://127.0.0.1:8080` with no overrides.
-
-**Bugs found and fixed by running for real:** container-level `runAsNonRoot=false` sent by the Terraform kubernetes
-provider (rejected by PSA `restricted`); a FastAPI dependency alias invisible under postponed annotations
-(`/readyz` → 422); offline `helm template` assuming Kubernetes v1.20; failed first installs that Helm relabels
-`superseded` being eligible rollback targets; a SPA fallback masking a missing `/healthz` proxy in compose; and
-Windows/Git Bash path handling in the scripts.
-
-**Not run:** the LLM path against a live Ollama model (not installed here); Azure DevOps itself (no
-organisation/agent; the YAML calls the same verified scripts); any cloud `plan`/`apply`.
+| Backend tests (API, validation, pipelines API, traversal, approvals) | 30 passed |
+| AI tooling tests (allowlist, plans, env-config policy, health gate, rollback, Ollama client, geniac) | 87 passed |
+| Frontend: ESLint, Vitest (20), type-check + build, Playwright (2) | all passed |
+| Docker Compose: build, health, 7 smoke checks | passed |
+| Helm lint (5 value sets), Terraform fmt + validate (local, AWS, GCP) | passed |
+| kind: terraform apply, build, deploy/verify staging, approval, promote/verify production | passed |
+| Automatic rollback (`demo-rollback`) | broken release detected and rolled back, incident report written |
+| Preview environment lifecycle (deploy → smoke → destroy) | passed |
+| Pipelines dashboard: live progress, approval from the UI, rejection, failure, simulate | passed |
+| Not executed | live Ollama inference; Azure DevOps service; AWS/GCP `plan`/`apply`; the ingress-nginx controller pod on this network (I-15) |
 
 ---
 
-## 11. Troubleshooting
+## 14. Issues register (problems encountered and resolutions)
 
-| Symptom | Fix |
+Every issue below was observed during implementation or verification, and resolved unless stated otherwise.
+
+| ID | Area | Symptom | Root cause | Resolution |
+|---|---|---|---|---|
+| I-01 | Backend | `GET /readyz` returned 422 "missing query parameter" | With postponed annotations, FastAPI resolves type hints from module globals; the `SessionDep` alias was defined inside `create_app()` | Dependency alias moved to module level; covered by tests |
+| I-02 | Kubernetes / Terraform | PostgreSQL pods rejected: `violates PodSecurity "restricted": runAsNonRoot != true` | The Terraform kubernetes provider sends `runAsNonRoot=false` at container level, overriding the pod setting | Explicit container-level `run_as_non_root = true` and `run_as_user` |
+| I-03 | Terraform | `Error: Cycle` between `module.app` and `module.database` | A reference into a `for_each` module waits on all of that module's outputs | DB credentials Secret split into `modules/app/database-secret` (namespace → database → secret) |
+| I-04 | Terraform | Sensitive value used in `count` | `count = var.database == null` on a sensitive input | Explicit boolean, then the split from I-03 |
+| I-05 | Helm | `chart requires kubeVersion >=1.27 … incompatible with v1.20` during render | Offline `helm template` assumes Kubernetes v1.20 | Render with `--validate` against the target cluster (also server-side validation) |
+| I-06 | AI health gate | Rollback could target a revision that had itself failed | Helm relabels a failed first install as `superseded` | Revisions whose description contains "failed" are excluded; regression test added |
+| I-07 | Compose | `/healthz` smoke check passed while the backend was unreachable | The SPA fallback served `index.html` (HTTP 200) for `/healthz` | nginx proxies `/healthz` and `/readyz`; smoke test now checks the JSON body |
+| I-08 | Scripts (Windows) | Native tools received `/c/...` paths; `.tools/bin` missing from PATH; `/deploy-preview …` rewritten into a file path | Git Bash path conversion; the colon in `C:/` split the PATH entry | `cygpath -m` for paths, POSIX path for PATH, `MSYS_NO_PATHCONV` for the AI CLI |
+| I-09 | Scripts | Every script could exit at start-up | The `.env` loader's last `[[ … ]] && export` returned 1 under `set -e` | Rewritten as an `if` |
+| I-10 | Dev environment (Win ARM64) | `pip install` failed for psycopg and PyYAML 6.0.2 | No Windows-ARM64 wheels | PyYAML 6.0.3; psycopg skipped on Win-ARM64 (the backend runs in Docker); documented |
+| I-11 | AI env-config | Staging classified as "high-availability" | The spec text "before production" matched the HA keyword "production" | Classifier uses goal words only, never environment names; regression test |
+| I-12 | AI tooling | Rollback crashed (`unexpected keyword 'run'`) | Wrong keyword argument to the executor | Fixed; caught by the unit tests before any cluster run |
+| I-13 | kind | `kind load docker-image` → `ctr: content digest … not found` | Docker Desktop's containerd image store exports multi-platform images incompletely | `docker save --platform … \| kind load image-archive` (documented) |
+| I-14 | Tooling download | kind/helm downloads from GitHub stalled | Network throughput | Pinned versions built from the Go module proxy; terraform from releases.hashicorp.com with checksum |
+| I-15 | Ingress (environment) | ingress-nginx controller image never pulled | `cdn.registry.k8s.io` unreachable from this network | **Open (environmental).** Verification used port-forward (`APP_BASE_URL_<ENV>`); everything else ran for real |
+| I-16 | Compose / dev | Backend outside Docker couldn't reach PostgreSQL | DB port wasn't published | Published on `127.0.0.1` only |
+| I-17 | Frontend | Fixture data shipped in the production bundle | Static import of the fixture API | Lazy import behind a build-time flag; verified absent from `dist/` |
+| I-18 | Frontend | Approve/Reject buttons cut off on the production stage card | Fixed-width stage cards overflowed the main column | Cards shrink to fit; horizontal scroll only as a fallback |
+| I-19 | Pipeline | A finished run could be re-marked as failed by the exit trap | `grep '"finishedAt": null'` matched stage-level fields | Explicit `RUN_FINISHED` flag |
+| I-20 | Tests (Windows) | Log endpoint test failed on `\r\n` | Test fixture written in text mode on Windows | Fixture written as bytes |
+| I-21 | Windows shell | `bash scripts/pipeline.sh` in PowerShell → `WSL … execvpe(/bin/bash) failed` | `bash` resolves to the WSL launcher with no distro installed | Use Git Bash, or `& "C:\Program Files\Git\bin\bash.exe" …` (section 5) |
+| I-22 | Pipeline | `pipeline.sh: line 146: $1: unbound variable` when run without arguments; trigger label lost | `trigger_for` read `$1` under `set -u` | Defaults (`${1:-}`) applied |
+| I-23 | Cloud readiness | Cloud deploy would fail: wrong image repository, fixed hostnames, a single kube context, ARM64 images on AMD64 nodes | Scripts were local-only | `REGISTRY`, `APP_DOMAIN`, `KUBE_CONTEXT_<ENV>`, `APP_BASE_URL_<ENV>`, `BUILD_PLATFORM` (buildx) |
+| I-24 | AWS module | First apply would fail with "Unauthorized" after the cluster was created | EKS API authentication mode without granting the creator access | `bootstrap_cluster_creator_admin_permissions = true` |
+| I-25 | AWS module | NLB IP targets require the AWS Load Balancer Controller | `nlb-target-type: ip` annotation without the controller | Annotation removed (in-tree NLB); controller documented as optional |
+| I-26 | Governance | An automated agent attempted to approve the production gate during verification | n/a (control working as intended) | Blocked by policy; production approval stays a human decision |
+| I-27 | Verification harness | Full run 20261114.8: health gate rolled staging back (`synthetic probe error rate 20% {'conn_error': 2}`) | The port-forward used instead of the ingress (I-15) is pinned to one pod and drops for about 2 s when Helm replaces the pods; the probe ran inside that gap | Gate behaved correctly (real errors were observed). With port-forwards, use `HEALTH_SETTLE_SECONDS=20`. Doesn't occur behind a real ingress controller |
+
+---
+
+## 15. Known limitations and open items
+
+| ID | Item | Impact / next step |
+|---|---|---|
+| L-01 | AWS and GCP stacks never planned or applied | Run `plan` in a sandbox account/project; expect IAM/quota adjustments |
+| L-02 | LLM path not exercised against a live model in this environment | Install Ollama and run `scripts/pipeline.sh status`; behaviour is covered by fake-client tests |
+| L-03 | Azure DevOps service not connected | Create the pipeline and self-hosted agent (section 7.2) |
+| L-04 | Ingress controller not running on the build workstation (I-15) | Re-run `scripts/tf.sh local apply` on a network that can reach `registry.k8s.io` |
+| L-05 | Approval API has no authentication | Put it behind SSO (for example Entra ID) with an approvers group, or rely on Azure Environment approvals |
+| L-06 | TLS and DNS are not automated in the cloud | Add cert-manager or ACM/Google-managed certificates |
+| L-07 | ingress-nginx is in end-of-life maintenance upstream | Replace `modules/ingress` with a Gateway API implementation; apps only depend on the IngressClass |
+| L-08 | Metrics for the health gate come from a synthetic probe + Kubernetes signals | Add Prometheus queries in `health.collect()` |
+| L-09 | Container images pinned by tag, not by digest | Add Renovate digest pinning |
+
+---
+
+## 16. Troubleshooting
+
+| Symptom | Resolution |
 |---|---|
-| `docker compose up` says POSTGRES_PASSWORD must be set | `cp .env.example .env` |
-| Port 8080 already in use | `INGRESS_HTTP_PORT=9080` in `.env`, then recreate the kind cluster and set `ingress_http_port` in `environments/local/local.tfvars` |
-| `namespace 'staging' missing` during deploy | run `scripts/pipeline.sh platform` first |
-| `[AI FALLBACK] … model 'llama3.2:3b' is not pulled` | `ollama pull llama3.2:3b` (or set `OLLAMA_MODEL`) |
-| AI calls time out on a slow CPU | raise `AI_TIMEOUT_SECONDS`, or use a smaller model |
-| `*.localhost` doesn't resolve (old tools) | use `curl -H "Host: staging.ideaboard.localhost" http://127.0.0.1:8080/` |
-| Windows | run scripts from **Git Bash**. The repo forces LF line endings via `.gitattributes` |
-| `kind load docker-image` fails with `ctr: content digest … not found` (Docker Desktop containerd image store, multi-arch images) | `docker save --platform linux/$(uname -m \| sed 's/x86_64/amd64/;s/aarch64/arm64/') -o img.tar <image> && kind load image-archive img.tar --name idea-board`. The images this repo builds are single-platform and load fine |
-| Pods stuck in `ContainerCreating` / `ImagePullBackOff` for `registry.k8s.io` images on a slow network | pre-pull inside the node with retries: `docker exec idea-board-control-plane crictl pull registry.k8s.io/ingress-nginx/controller:v1.12.0`, then re-run `scripts/tf.sh local apply` (Terraform replaces the timed-out releases) |
-| GitHub release downloads (kind/helm) are too slow for `install-tools.sh` | build the pinned versions from the Go module proxy: `docker run --rm -v "$PWD/.tools/bin:/out" -e GOOS=<os> -e GOARCH=<arch> golang:1.23.4-alpine sh -c 'go install sigs.k8s.io/kind@v0.26.0 && cp -r /go/bin/* /out/'` |
+| `POSTGRES_PASSWORD must be set` | `cp .env.example .env` |
+| `WSL … execvpe(/bin/bash) failed` | Use Git Bash (I-21) |
+| `namespace 'staging' missing` | `bash scripts/pipeline.sh platform` |
+| Pipeline waits at `promote-production` | Approve at http://localhost:3000/pipelines, or use `PIPELINE_APPROVAL=auto` |
+| `[AI FALLBACK] … model … is not pulled` | `ollama pull llama3.2:3b`, or set `OLLAMA_MODEL` |
+| Port 8080 in use | `INGRESS_HTTP_PORT=9080` in `.env`; recreate the kind cluster; update `local.tfvars` |
+| Pods stuck in `ImagePullBackOff` for `registry.k8s.io` images | `docker exec idea-board-control-plane crictl pull <image>`, then `scripts/tf.sh local apply` |
+| `kind load` → `content digest not found` | I-13 workaround |
+| Pipelines page shows "No pipeline runs yet" | `bash scripts/pipeline.sh simulate`; make sure compose was started from the repository root (it mounts `./artifacts/runs`) |
+| Playwright can't find a browser | `PW_CHANNEL=msedge npm run test:e2e`, or `npx playwright install chromium` |
+
+---
+
+## 17. Configuration reference
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AI_ENABLED` | `true` | `false` forces deterministic fallbacks |
+| `OLLAMA_HOST` / `OLLAMA_MODEL` / `AI_TIMEOUT_SECONDS` | `http://localhost:11434` / `llama3.2:3b` / `90` | Local LLM |
+| `PIPELINE_APPROVAL` | `ui` | `auto` skips the production gate (Azure uses Environment approvals) |
+| `PIPELINE_APPROVAL_TIMEOUT` | `1800` | Seconds before an unanswered approval times out (run fails) |
+| `KUBE_CONTEXT`, `KUBE_CONTEXT_<ENV>` | `kind-idea-board` | Cluster per environment |
+| `APP_BASE_URL`, `APP_BASE_URL_<ENV>` | `http://127.0.0.1:8080` | Where the health gate and smoke tests reach the ingress |
+| `APP_DOMAIN` | `ideaboard.localhost` | Hostnames: `staging.<domain>`, `<domain>` |
+| `REGISTRY` | (unset: kind load) | Push images and set the chart's image repositories |
+| `BUILD_PLATFORM` | (unset: native) | For example `linux/amd64`, built and pushed with buildx (requires `REGISTRY`) |
+| `IMAGE_TAG` | commit SHA | Override the image tag |
+| `HELM_TIMEOUT` / `HEALTH_SETTLE_SECONDS` | `4m` / `5` | Deploy timing |
+| `SIMULATE_STEP_SECONDS` / `SIMULATE_FAIL_JOB` | `1` / (unset) | `pipeline.sh simulate` behaviour |
+| `PIPELINE_RUNS_DIR` (backend) | (unset: no runs) | Directory served by `/api/pipelines` (compose: `/data/runs`) |
