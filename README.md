@@ -24,6 +24,7 @@ feature falls back to deterministic logic when the LLM is missing.
 3. [Prerequisites](#3-prerequisites)
 4. [Run locally with Docker Compose](#4-run-locally-with-docker-compose)
 5. [Run on local Kubernetes (kind + Terraform + pipeline)](#5-run-on-local-kubernetes-kind--terraform--pipeline)
+   - [Pipelines page](#5a-pipelines-page-run-view-in-the-browser)
 6. [CI/CD: Azure Pipelines and the local runner](#6-cicd-azure-pipelines-and-the-local-runner)
 7. [AI Integration](#7-ai-integration)
 8. [Cloud-Agnostic Approach](#8-cloud-agnostic-approach)
@@ -250,6 +251,50 @@ ls artifacts/   # ai/ (audit), generated/, incidents/, health/, smoke-*.txt, man
 `kubectl port-forward svc/idea-board-frontend 18081:8080 -n staging` if the ingress controller is unavailable.
 
 Tear down: `kind delete cluster --name idea-board && rm -rf .state`.
+
+---
+
+## 5a. Pipelines page (run view in the browser)
+
+The frontend has a second page, **`/pipelines`**, that shows pipeline runs in the style of the Azure
+DevOps run view. It has:
+
+* a run list
+* a header with run number, branch, commit, trigger, status and duration
+* left-to-right stage cards with their jobs
+* a live log panel for each job
+* an **Approve / Reject** gate on `promote-production`
+* an AI panel showing every AI decision (kind, validation result, deterministic-fallback badge, output, prompt)
+* a rollback banner carrying the AI incident summary
+
+The page polls every 3 seconds while a run is `running` or `waitingApproval`.
+
+```bash
+docker compose up -d --build --wait             # backend mounts ./artifacts/runs
+bash scripts/pipeline.sh simulate               # sample run, no cluster needed (Git Bash)
+# open http://localhost:3000/pipelines - watch it progress, then click Approve
+```
+
+* **Data:** every `scripts/pipeline.sh` run (except `status`) writes `artifacts/runs/<runId>/run.json`,
+  plus one log per job in `logs/<job>.log`, *while it runs*. The writer is `scripts/runstate.py`.
+  The backend serves this data read-only at `GET /api/pipelines`, `GET /api/pipelines/{runId}` and
+  `GET /api/pipelines/{runId}/logs/{job}`. IDs are pattern-checked and every path must resolve inside the
+  runs directory.
+* **Approvals:** `POST /api/pipelines/{runId}/approve` with `{"decision":"approve"|"reject"}` records the
+  decision in `run.json`, and the waiting runner picks it up. **It has no authentication.** It's a local
+  demo; put real auth in front of it before exposing it. The CLI alternative is
+  `python scripts/runstate.py --run-dir artifacts/runs/<runId> decide approve`. With
+  `PIPELINE_APPROVAL=auto` the gate is skipped; Azure Pipelines uses this, because its Environment
+  approvals do the gating.
+* **`simulate`** keeps the real stage/job graph, run state, logs and approval gate, and calls the real
+  AI env-config step, but it builds and deploys nothing (every log line says `SIMULATED`).
+  `SIMULATE_FAIL_JOB=build` produces a failed run. A real rollback run comes from
+  `scripts/pipeline.sh demo-rollback` on the kind cluster.
+* **UI development without a pipeline:** `cd frontend && npm run dev:fixtures` (http://localhost:5173/pipelines)
+  serves `src/fixtures/`: a succeeded run, a rolled-back run and a run waiting for approval.
+* **Tests:** `npm test` (Vitest: status → colour mapping, stage/job rendering from fixture run.json,
+  approval gate, AI panel, rollback banner) and `npm run test:e2e` (Playwright on the fixtures; with
+  `PW_CHANNEL=msedge` it uses the installed Edge, otherwise run `npx playwright install chromium` first).
 
 ---
 
