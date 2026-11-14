@@ -187,11 +187,16 @@ container runs read-only as uid 10001 with `no-new-privileges`.
 **Developing without containers:**
 
 ```bash
+# Frontend with live reload against the containerised backend (works on every OS):
+docker compose up -d --wait postgres backend
+cd frontend && npm ci && npm run dev               # http://localhost:5173 - Vite proxies /api to :8000
+
+# Backend outside Docker too (Linux/macOS/Windows x64; psycopg has no Windows-ARM64 wheel):
 python -m venv .venv && . .venv/bin/activate      # Windows Git Bash: . .venv/Scripts/activate
 pip install -r backend/requirements-dev.txt -r ai/requirements-dev.txt
-docker compose up -d postgres
-cd backend && DB_PASSWORD=change-me-locally DB_SSLMODE=disable uvicorn app.main:create_app --factory --reload
-cd frontend && npm ci && npm run dev               # Vite proxies /api to :8000
+docker compose up -d --wait postgres && docker compose stop backend frontend
+cd backend && DB_HOST=localhost DB_PASSWORD=<POSTGRES_PASSWORD from .env> DB_SSLMODE=disable \
+  uvicorn app.main:create_app --factory --reload
 ```
 
 ---
