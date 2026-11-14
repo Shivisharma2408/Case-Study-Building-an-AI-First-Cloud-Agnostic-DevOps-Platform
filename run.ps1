@@ -125,5 +125,6 @@ Usage: .\run.cmd <command>
   pipeline [stage]      run scripts/pipeline.sh through Git Bash, e.g. 'pipeline simulate', 'pipeline lint-test'
   bash <script> [args]  run any repo script through Git Bash, e.g. 'bash scripts/tf.sh local validate'
 "@
+    exit 0
   }
 }

@@ -173,6 +173,31 @@ Traefik and k3s; minikube needs a VM driver and more resources.
 
 ## 6. Running the solution locally
 
+### 6.0 Quick start on Windows (clone → run in four commands)
+
+Install **Git for Windows**, **Docker Desktop** (running), **Node.js 20+** and **Python 3.11+** (tick *Add to
+PATH*). Then, in PowerShell or cmd:
+
+```powershell
+git clone <repository-url> idea-board
+cd idea-board
+.\run.cmd setup      # checks tools, creates .env, .venv (Python deps) and node_modules
+.\run.cmd up         # builds and starts the app -> http://localhost:3000  (Pipelines: /pipelines)
+```
+
+| Command | What it does |
+|---|---|
+| `.\run.cmd test` | backend + AI + frontend tests, plus the production build |
+| `.\run.cmd pipeline simulate` | sample pipeline run for the dashboard (no cluster needed) |
+| `.\run.cmd pipeline <stage>` | any `scripts/pipeline.sh` stage, for example `lint-test`, `platform`, `demo-rollback` |
+| `.\run.cmd bash <script> [args]` | any repository script, for example `.\run.cmd bash scripts/tf.sh local validate` |
+| `.\run.cmd down` | stop the app |
+
+`run.cmd` always uses **Git Bash** (never the WSL `bash`, I-21) and needs no execution-policy change. Line endings
+are pinned in `.gitattributes`: shell scripts stay LF and Windows launchers stay CRLF, whatever your
+`core.autocrlf` setting. The full Kubernetes path (section 6.2) also needs kind, kubectl, helm and terraform:
+`.\run.cmd bash scripts/install-tools.sh` installs pinned copies into `.tools\bin`.
+
 ### 6.1 Docker Compose (development)
 
 ```bash
